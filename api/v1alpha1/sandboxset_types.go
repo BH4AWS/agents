@@ -17,7 +17,6 @@ limitations under the License.
 package v1alpha1
 
 import (
-	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -50,15 +49,7 @@ type SandboxSetSpec struct {
 	// PersistentContents indicates resume pod with persistent content, Enum: ip, memory, filesystem
 	PersistentContents []string `json:"persistentContents,omitempty"`
 
-	// TemplateRef references a SandboxTemplate, which will be used to create the sandbox.
-	// +optional
-	TemplateRef *SandboxTemplateRef `json:"templateRef,omitempty"`
-
-	// Template describes the pods that will be created.
-	// +kubebuilder:pruning:PreserveUnknownFields
-	// +kubebuilder:validation:Schemaless
-	// +optional
-	Template *v1.PodTemplateSpec `json:"template,omitempty"`
+	SandboxTemplate `json:",inline"`
 }
 
 // SandboxSetStatus defines the observed state of SandboxSet.

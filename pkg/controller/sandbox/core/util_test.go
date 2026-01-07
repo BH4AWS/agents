@@ -34,16 +34,18 @@ func TestHashSandbox(t *testing.T) {
 			name: "basic sandbox with containers",
 			sandbox: &agentsv1alpha1.Sandbox{
 				Spec: agentsv1alpha1.SandboxSpec{
-					Template: &corev1.PodTemplateSpec{
-						Spec: corev1.PodSpec{
-							Containers: []corev1.Container{
-								{
-									Name:  "test-container",
-									Image: "nginx:latest",
-									Resources: corev1.ResourceRequirements{
-										Requests: corev1.ResourceList{
-											corev1.ResourceCPU:    resource.MustParse("100m"),
-											corev1.ResourceMemory: resource.MustParse("128Mi"),
+					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+						Template: &corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{
+										Name:  "test-container",
+										Image: "nginx:latest",
+										Resources: corev1.ResourceRequirements{
+											Requests: corev1.ResourceList{
+												corev1.ResourceCPU:    resource.MustParse("100m"),
+												corev1.ResourceMemory: resource.MustParse("128Mi"),
+											},
 										},
 									},
 								},
@@ -58,24 +60,26 @@ func TestHashSandbox(t *testing.T) {
 			name: "sandbox with init containers",
 			sandbox: &agentsv1alpha1.Sandbox{
 				Spec: agentsv1alpha1.SandboxSpec{
-					Template: &corev1.PodTemplateSpec{
-						Spec: corev1.PodSpec{
-							InitContainers: []corev1.Container{
-								{
-									Name:  "init-container",
-									Image: "busybox:latest",
-									Resources: corev1.ResourceRequirements{
-										Requests: corev1.ResourceList{
-											corev1.ResourceCPU:    resource.MustParse("50m"),
-											corev1.ResourceMemory: resource.MustParse("64Mi"),
+					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+						Template: &corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								InitContainers: []corev1.Container{
+									{
+										Name:  "init-container",
+										Image: "busybox:latest",
+										Resources: corev1.ResourceRequirements{
+											Requests: corev1.ResourceList{
+												corev1.ResourceCPU:    resource.MustParse("50m"),
+												corev1.ResourceMemory: resource.MustParse("64Mi"),
+											},
 										},
 									},
 								},
-							},
-							Containers: []corev1.Container{
-								{
-									Name:  "test-container",
-									Image: "nginx:latest",
+								Containers: []corev1.Container{
+									{
+										Name:  "test-container",
+										Image: "nginx:latest",
+									},
 								},
 							},
 						},
@@ -88,38 +92,40 @@ func TestHashSandbox(t *testing.T) {
 			name: "sandbox with multiple containers",
 			sandbox: &agentsv1alpha1.Sandbox{
 				Spec: agentsv1alpha1.SandboxSpec{
-					Template: &corev1.PodTemplateSpec{
-						Spec: corev1.PodSpec{
-							InitContainers: []corev1.Container{
-								{
-									Name:  "init-container-1",
-									Image: "busybox:1.28",
-									Resources: corev1.ResourceRequirements{
-										Requests: corev1.ResourceList{
-											corev1.ResourceCPU:    resource.MustParse("50m"),
-											corev1.ResourceMemory: resource.MustParse("64Mi"),
+					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+						Template: &corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								InitContainers: []corev1.Container{
+									{
+										Name:  "init-container-1",
+										Image: "busybox:1.28",
+										Resources: corev1.ResourceRequirements{
+											Requests: corev1.ResourceList{
+												corev1.ResourceCPU:    resource.MustParse("50m"),
+												corev1.ResourceMemory: resource.MustParse("64Mi"),
+											},
 										},
 									},
-								},
-								{
-									Name:  "init-container-2",
-									Image: "alpine:latest",
-								},
-							},
-							Containers: []corev1.Container{
-								{
-									Name:  "app-container",
-									Image: "myapp:1.0",
-									Resources: corev1.ResourceRequirements{
-										Limits: corev1.ResourceList{
-											corev1.ResourceCPU:    resource.MustParse("500m"),
-											corev1.ResourceMemory: resource.MustParse("512Mi"),
-										},
+									{
+										Name:  "init-container-2",
+										Image: "alpine:latest",
 									},
 								},
-								{
-									Name:  "sidecar-container",
-									Image: "sidecar:latest",
+								Containers: []corev1.Container{
+									{
+										Name:  "app-container",
+										Image: "myapp:1.0",
+										Resources: corev1.ResourceRequirements{
+											Limits: corev1.ResourceList{
+												corev1.ResourceCPU:    resource.MustParse("500m"),
+												corev1.ResourceMemory: resource.MustParse("512Mi"),
+											},
+										},
+									},
+									{
+										Name:  "sidecar-container",
+										Image: "sidecar:latest",
+									},
 								},
 							},
 						},
@@ -132,9 +138,11 @@ func TestHashSandbox(t *testing.T) {
 			name: "sandbox with empty containers",
 			sandbox: &agentsv1alpha1.Sandbox{
 				Spec: agentsv1alpha1.SandboxSpec{
-					Template: &corev1.PodTemplateSpec{
-						Spec: corev1.PodSpec{
-							Containers: []corev1.Container{},
+					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+						Template: &corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{},
+							},
 						},
 					},
 				},
@@ -145,29 +153,31 @@ func TestHashSandbox(t *testing.T) {
 			name: "sandbox with volumes and other fields",
 			sandbox: &agentsv1alpha1.Sandbox{
 				Spec: agentsv1alpha1.SandboxSpec{
-					Template: &corev1.PodTemplateSpec{
-						ObjectMeta: metav1.ObjectMeta{
-							Labels: map[string]string{
-								"app": "test",
-							},
-						},
-						Spec: corev1.PodSpec{
-							Containers: []corev1.Container{
-								{
-									Name:  "test-container",
-									Image: "nginx:latest",
+					SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+						Template: &corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Labels: map[string]string{
+									"app": "test",
 								},
 							},
-							Volumes: []corev1.Volume{
-								{
-									Name: "test-volume",
-									VolumeSource: corev1.VolumeSource{
-										EmptyDir: &corev1.EmptyDirVolumeSource{},
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{
+										Name:  "test-container",
+										Image: "nginx:latest",
 									},
 								},
-							},
-							NodeSelector: map[string]string{
-								"kubernetes.io/os": "linux",
+								Volumes: []corev1.Volume{
+									{
+										Name: "test-volume",
+										VolumeSource: corev1.VolumeSource{
+											EmptyDir: &corev1.EmptyDirVolumeSource{},
+										},
+									},
+								},
+								NodeSelector: map[string]string{
+									"kubernetes.io/os": "linux",
+								},
 							},
 						},
 					},
@@ -221,12 +231,14 @@ func TestHashSandboxWithDifferentImages(t *testing.T) {
 	// Test that changing only image results in different full hash but same hash without image/resources
 	sandbox1 := &agentsv1alpha1.Sandbox{
 		Spec: agentsv1alpha1.SandboxSpec{
-			Template: &corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "test-container",
-							Image: "nginx:1.19", // Different image
+			SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+				Template: &corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:  "test-container",
+								Image: "nginx:1.19", // Different image
+							},
 						},
 					},
 				},
@@ -236,12 +248,14 @@ func TestHashSandboxWithDifferentImages(t *testing.T) {
 
 	sandbox2 := &agentsv1alpha1.Sandbox{
 		Spec: agentsv1alpha1.SandboxSpec{
-			Template: &corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "test-container",
-							Image: "nginx:1.20", // Different image
+			SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+				Template: &corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:  "test-container",
+								Image: "nginx:1.20", // Different image
+							},
 						},
 					},
 				},
@@ -268,16 +282,18 @@ func TestHashSandboxWithDifferentResources(t *testing.T) {
 	// Test that changing only resources results in different full hash but same hash without image/resources
 	sandbox1 := &agentsv1alpha1.Sandbox{
 		Spec: agentsv1alpha1.SandboxSpec{
-			Template: &corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "test-container",
-							Image: "nginx:latest",
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("100m"),
-									corev1.ResourceMemory: resource.MustParse("128Mi"),
+			SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+				Template: &corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:  "test-container",
+								Image: "nginx:latest",
+								Resources: corev1.ResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceCPU:    resource.MustParse("100m"),
+										corev1.ResourceMemory: resource.MustParse("128Mi"),
+									},
 								},
 							},
 						},
@@ -289,16 +305,18 @@ func TestHashSandboxWithDifferentResources(t *testing.T) {
 
 	sandbox2 := &agentsv1alpha1.Sandbox{
 		Spec: agentsv1alpha1.SandboxSpec{
-			Template: &corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "test-container",
-							Image: "nginx:latest",
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("200m"),  // Different resource
-									corev1.ResourceMemory: resource.MustParse("256Mi"), // Different resource
+			SandboxTemplate: agentsv1alpha1.SandboxTemplate{
+				Template: &corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:  "test-container",
+								Image: "nginx:latest",
+								Resources: corev1.ResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceCPU:    resource.MustParse("200m"),  // Different resource
+										corev1.ResourceMemory: resource.MustParse("256Mi"), // Different resource
+									},
 								},
 							},
 						},
@@ -320,5 +338,78 @@ func TestHashSandboxWithDifferentResources(t *testing.T) {
 	if hashWithoutImageResources1 != hashWithoutImageResources2 {
 		t.Errorf("Expected same hashes without images/resources, but got different: %s vs %s",
 			hashWithoutImageResources1, hashWithoutImageResources2)
+	}
+}
+
+func TestGeneratePVCName(t *testing.T) {
+	tests := []struct {
+		name         string
+		templateName string
+		sandboxName  string
+		expectError  bool
+		expectName   string
+	}{
+		{
+			name:         "normal case",
+			templateName: "www",
+			sandboxName:  "test-sandbox",
+			expectError:  false,
+			expectName:   "www-test-sandbox",
+		},
+		{
+			name:         "template name with hyphen",
+			templateName: "data-volume",
+			sandboxName:  "test-sandbox",
+			expectError:  false,
+			expectName:   "data-volume-test-sandbox",
+		},
+		{
+			name:         "sandbox name with number",
+			templateName: "cache",
+			sandboxName:  "app-123",
+			expectError:  false,
+			expectName:   "cache-app-123",
+		},
+		{
+			name:         "empty template name",
+			templateName: "",
+			sandboxName:  "test-sandbox",
+			expectError:  true,
+		},
+		{
+			name:         "empty sandbox name",
+			templateName: "www",
+			sandboxName:  "",
+			expectError:  true,
+		},
+		{
+			name:         "both empty names",
+			templateName: "",
+			sandboxName:  "",
+			expectError:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := GeneratePVCName(tt.templateName, tt.sandboxName)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+				}
+				// Verify that the error message is meaningful
+				if err != nil && err.Error() == "" {
+					t.Errorf("Expected error message but got empty string")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if result != tt.expectName {
+					t.Errorf("Expected name %s, but got %s", tt.expectName, result)
+				}
+			}
+		})
 	}
 }
