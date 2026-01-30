@@ -12,6 +12,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"github.com/openkruise/agents/pkg/servers/web"
+	"k8s.io/klog/v2"
 )
 
 var (
@@ -19,19 +20,24 @@ var (
 )
 
 func (sc *Controller) getSandboxOfUser(ctx context.Context, sandboxID string) (infra.Sandbox, *web.ApiError) {
+	log := klog.FromContext(ctx).WithValues("sandboxID", sandboxID)
+	log.Info("getting sandbox of user")
 	user := GetUserFromContext(ctx)
 	if user == nil {
+		log.Error(nil, "user not found")
 		return nil, &web.ApiError{
 			Message: "User not found",
 		}
 	}
 	sbx, err := sc.manager.GetClaimedSandbox(ctx, user.ID.String(), sandboxID)
 	if err != nil {
+		log.Error(err, "sandbox not found")
 		return nil, &web.ApiError{
 			Code:    http.StatusNotFound,
-			Message: fmt.Sprintf("Sandbox %s not found", sandboxID),
+			Message: fmt.Sprintf("Cannot get sandbox %s: %v", sandboxID, err),
 		}
 	}
+	log.Info("sandbox found", "sandbox", klog.KObj(sbx))
 	return sbx, nil
 }
 
