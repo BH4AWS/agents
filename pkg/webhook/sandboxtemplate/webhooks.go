@@ -1,11 +1,12 @@
-package sandboxset
+package sandboxtemplate
 
 import (
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
 	"github.com/openkruise/agents/pkg/webhook/sandboxtemplate/mutating"
 	"github.com/openkruise/agents/pkg/webhook/sandboxtemplate/validating"
 	"github.com/openkruise/agents/pkg/webhook/types"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
-	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 func GetHandlerGetters() []types.HandlerGetter {

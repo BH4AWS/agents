@@ -30,7 +30,7 @@ func (h *Defaulter) Enabled() bool {
 	return true
 }
 
-func (h *Defaulter) Handle(_ context.Context, req admission.Request) admission.Response {
+func (h *Defaulter) Handle(ctx context.Context, req admission.Request) admission.Response {
 	obj := &agentsv1alpha1.SandboxTemplate{}
 	err := h.Decoder.Decode(req, obj)
 	if err != nil {

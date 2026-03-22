@@ -35,13 +35,17 @@ const (
 
 	// SandboxCreatePodRateLimitGate enables rate limiting for sandbox controller creating pod.
 	SandboxCreatePodRateLimitGate featuregate.Feature = "SandboxCreatePodRateLimitGate"
+
+	// SandboxCreatePodInjectConfigGate enables injecting sidecar config for sandbox pod
+	SandboxCreatePodInjectConfigGate featuregate.Feature = "SandboxCreatePodInjectConfigGate"
 )
 
 var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
-	SandboxGate:                   {Default: true, PreRelease: featuregate.Alpha},
-	SandboxSetGate:                {Default: true, PreRelease: featuregate.Alpha},
-	SandboxClaimGate:              {Default: true, PreRelease: featuregate.Alpha},
-	SandboxCreatePodRateLimitGate: {Default: false, PreRelease: featuregate.Alpha},
+	SandboxGate:                      {Default: true, PreRelease: featuregate.Alpha},
+	SandboxSetGate:                   {Default: true, PreRelease: featuregate.Alpha},
+	SandboxClaimGate:                 {Default: true, PreRelease: featuregate.Alpha},
+	SandboxCreatePodRateLimitGate:    {Default: false, PreRelease: featuregate.Alpha},
+	SandboxCreatePodInjectConfigGate: {Default: false, PreRelease: featuregate.Alpha},
 }
 
 func init() {

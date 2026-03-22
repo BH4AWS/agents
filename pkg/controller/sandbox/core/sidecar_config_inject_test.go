@@ -1,0 +1,1082 @@
+package core
+
+import (
+	"context"
+	"reflect"
+	"strings"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+)
+
+// getTestNamespace returns the namespace used for testing
+func getTestNamespace() string {
+	// This should match the namespace returned by webhookutils.GetNamespace()
+	return "sandbox-system"
+}
+
+func TestSetCSIMountContainer(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name                string
+		template            *corev1.PodTemplateSpec
+		config              SidecarInjectConfig
+		expectedContainers  int
+		expectedVolumes     int
+		expectedEnvCount    int
+		expectedVolumeMount int
+	}{
+		{
+			name: "empty template with CSI config",
+			template: &corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "main-container",
+							Image: "nginx:latest",
+						},
+					},
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{
+						{Name: "ENV1", Value: "value1"},
+						{Name: "ENV2", Value: "value2"},
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "mount-root", MountPath: "/run/csi/mount-root"},
+						{Name: "nas-plugin-dir", MountPath: "/var/run/csi/sockets/nasplugin.csi.alibabacloud.com"},
+					},
+				},
+				Sidecars: []corev1.Container{
+					{
+						Name:  "csi-sidecar",
+						Image: "csi-sidecar:latest",
+					},
+					{
+						Name:  "csi-agent-sidecar",
+						Image: "csi-agent:latest",
+					},
+				},
+				Volumes: []corev1.Volume{
+					{Name: "mount-root", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+					{Name: "nas-plugin-dir", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+					{Name: "oss-plugin-dir", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+				},
+			},
+			expectedContainers:  3, // 1 main + 2 sidecars
+			expectedVolumes:     3,
+			expectedEnvCount:    2,
+			expectedVolumeMount: 2,
+		},
+		{
+			name: "template with existing volumes - no duplicates",
+			template: &corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "main-container",
+							Image: "nginx:latest",
+						},
+					},
+					Volumes: []corev1.Volume{
+						{Name: "mount-root", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+					},
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "mount-root", MountPath: "/run/csi/mount-root"},
+					},
+				},
+				Sidecars: []corev1.Container{
+					{Name: "csi-sidecar", Image: "csi-sidecar:latest"},
+				},
+				Volumes: []corev1.Volume{
+					{Name: "mount-root", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+					{Name: "new-volume", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+				},
+			},
+			expectedContainers:  2, // 1 main + 1 sidecar
+			expectedVolumes:     2, // mount-root (existing) + new-volume
+			expectedEnvCount:    0,
+			expectedVolumeMount: 1,
+		},
+		{
+			name: "template with existing envs - no duplicates",
+			template: &corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "main-container",
+							Image: "nginx:latest",
+							Env: []corev1.EnvVar{
+								{Name: "ENV1", Value: "existing-value"},
+							},
+						},
+					},
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{
+						{Name: "ENV1", Value: "value1"}, // duplicate
+						{Name: "ENV2", Value: "value2"}, // new
+					},
+				},
+				Sidecars: []corev1.Container{},
+				Volumes:  []corev1.Volume{},
+			},
+			expectedContainers:  1,
+			expectedVolumes:     0,
+			expectedEnvCount:    2, // ENV1 (existing) + ENV2 (new)
+			expectedVolumeMount: 0,
+		},
+		{
+			name: "empty containers list",
+			template: &corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{},
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{{Name: "ENV1", Value: "value1"}},
+				},
+				Sidecars: []corev1.Container{{Name: "sidecar", Image: "sidecar:latest"}},
+				Volumes:  []corev1.Volume{{Name: "vol1", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
+			},
+			expectedContainers:  0, // no change when containers list is empty
+			expectedVolumes:     0,
+			expectedEnvCount:    0,
+			expectedVolumeMount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setCSIMountContainer(ctx, tt.template, tt.config)
+
+			// Verify container count
+			if len(tt.template.Spec.Containers) != tt.expectedContainers {
+				t.Errorf("expected %d containers, got %d", tt.expectedContainers, len(tt.template.Spec.Containers))
+			}
+
+			// Verify volume count
+			if len(tt.template.Spec.Volumes) != tt.expectedVolumes {
+				t.Errorf("expected %d volumes, got %d", tt.expectedVolumes, len(tt.template.Spec.Volumes))
+			}
+
+			// Verify main container env count
+			if len(tt.template.Spec.Containers) > 0 {
+				mainContainer := tt.template.Spec.Containers[0]
+				if len(mainContainer.Env) != tt.expectedEnvCount {
+					t.Errorf("expected %d env vars, got %d", tt.expectedEnvCount, len(mainContainer.Env))
+				}
+
+				// Verify main container volume mount count
+				if len(mainContainer.VolumeMounts) != tt.expectedVolumeMount {
+					t.Errorf("expected %d volume mounts, got %d", tt.expectedVolumeMount, len(mainContainer.VolumeMounts))
+				}
+			}
+		})
+	}
+}
+
+func TestSetAgentRuntimeContainer(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name                     string
+		template                 *corev1.PodTemplateSpec
+		config                   SidecarInjectConfig
+		expectedInitContainers   int
+		expectedContainers       int
+		expectedEnvCount         int
+		hasPostStartLifecycle    bool
+		hasPostStartCommand      bool
+		expectedVolumeMountCount int
+	}{
+		{
+			name: "empty template with runtime config",
+			template: &corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "main-container",
+							Image: "nginx:latest",
+						},
+					},
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{
+						{Name: "ENVD_DIR", Value: "/mnt/envd"},
+						{Name: "GODEBUG", Value: "multipathtcp=0"},
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "envd-volume", MountPath: "/mnt/envd"},
+					},
+					Lifecycle: &corev1.Lifecycle{
+						PostStart: &corev1.LifecycleHandler{
+							Exec: &corev1.ExecAction{
+								Command: []string{"bash", "-c", "/mnt/envd/envd-run.sh"},
+							},
+						},
+					},
+				},
+				Sidecars: []corev1.Container{
+					{
+						Name:    "init-runtime",
+						Image:   "runtime:latest",
+						Command: []string{"sh", "/workspace/entrypoint_inner.sh"},
+					},
+				},
+			},
+			expectedInitContainers:   1,
+			expectedContainers:       1,
+			expectedEnvCount:         2,
+			hasPostStartLifecycle:    true,
+			hasPostStartCommand:      true,
+			expectedVolumeMountCount: 1,
+		},
+		{
+			name: "template with existing init containers",
+			template: &corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					InitContainers: []corev1.Container{
+						{Name: "existing-init", Image: "init:latest"},
+					},
+					Containers: []corev1.Container{
+						{Name: "main-container", Image: "nginx:latest"},
+					},
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{{Name: "ENV1", Value: "value1"}},
+				},
+				Sidecars: []corev1.Container{
+					{Name: "init-runtime-1", Image: "runtime1:latest"},
+					{Name: "init-runtime-2", Image: "runtime2:latest"},
+				},
+			},
+			expectedInitContainers:   3,
+			expectedContainers:       1,
+			expectedEnvCount:         1,
+			hasPostStartLifecycle:    true,  // Function creates empty PostStart handler
+			hasPostStartCommand:      false, // But doesn't set command if config doesn't have one
+			expectedVolumeMountCount: 0,
+		},
+		{
+			name: "template without init containers",
+			template: &corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{Name: "main-container", Image: "nginx:latest"},
+					},
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{},
+				Sidecars: []corev1.Container{
+					{Name: "init-runtime", Image: "runtime:latest"},
+				},
+			},
+			expectedInitContainers:   1,
+			expectedContainers:       1,
+			expectedEnvCount:         0,
+			hasPostStartLifecycle:    true, // Function creates empty PostStart handler
+			hasPostStartCommand:      false,
+			expectedVolumeMountCount: 0,
+		},
+		{
+			name: "empty containers list",
+			template: &corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{},
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{{Name: "ENV1", Value: "value1"}},
+				},
+				Sidecars: []corev1.Container{{Name: "init", Image: "init:latest"}},
+			},
+			expectedInitContainers:   1,
+			expectedContainers:       0,
+			expectedEnvCount:         0,
+			hasPostStartLifecycle:    false, // No container to modify
+			hasPostStartCommand:      false,
+			expectedVolumeMountCount: 0,
+		},
+		{
+			name: "multiple runtime sidecars",
+			template: &corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "main-container",
+							Image: "nginx:latest",
+						},
+					},
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{
+						{Name: "POD_UID", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"}}},
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "envd-volume", MountPath: "/mnt/envd"},
+					},
+				},
+				Sidecars: []corev1.Container{
+					{Name: "init-1", Image: "runtime1:latest"},
+					{Name: "init-2", Image: "runtime2:latest"},
+					{Name: "init-3", Image: "runtime3:latest"},
+				},
+			},
+			expectedInitContainers:   3,
+			expectedContainers:       1,
+			expectedEnvCount:         1,
+			hasPostStartLifecycle:    true,  // Function creates empty PostStart handler
+			hasPostStartCommand:      false, // But doesn't set command if config doesn't have one
+			expectedVolumeMountCount: 1,
+		},
+		{
+			name: "override existing lifecycle with config",
+			template: &corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "main-container",
+							Image: "nginx:latest",
+							Lifecycle: &corev1.Lifecycle{
+								PostStart: &corev1.LifecycleHandler{
+									Exec: &corev1.ExecAction{
+										Command: []string{"echo", "old"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{{Name: "ENV1", Value: "value1"}},
+					Lifecycle: &corev1.Lifecycle{
+						PostStart: &corev1.LifecycleHandler{
+							Exec: &corev1.ExecAction{
+								Command: []string{"echo", "new"},
+							},
+						},
+					},
+				},
+				Sidecars: []corev1.Container{
+					{Name: "init-runtime", Image: "runtime:latest"},
+				},
+			},
+			expectedInitContainers:   1,
+			expectedContainers:       1,
+			expectedEnvCount:         1,
+			hasPostStartLifecycle:    true,
+			hasPostStartCommand:      true,
+			expectedVolumeMountCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setAgentRuntimeContainer(ctx, tt.template, tt.config)
+
+			// Verify init container count
+			if len(tt.template.Spec.InitContainers) != tt.expectedInitContainers {
+				t.Errorf("expected %d init containers, got %d", tt.expectedInitContainers, len(tt.template.Spec.InitContainers))
+			}
+
+			// Verify container count
+			if len(tt.template.Spec.Containers) != tt.expectedContainers {
+				t.Errorf("expected %d containers, got %d", tt.expectedContainers, len(tt.template.Spec.Containers))
+			}
+
+			// Verify main container configuration
+			if len(tt.template.Spec.Containers) > 0 {
+				mainContainer := tt.template.Spec.Containers[0]
+
+				// Check env count
+				if len(mainContainer.Env) != tt.expectedEnvCount {
+					t.Errorf("expected %d env vars, got %d", tt.expectedEnvCount, len(mainContainer.Env))
+				}
+
+				// Check volume mount count
+				if len(mainContainer.VolumeMounts) != tt.expectedVolumeMountCount {
+					t.Errorf("expected %d volume mounts, got %d", tt.expectedVolumeMountCount, len(mainContainer.VolumeMounts))
+				}
+
+				// Check lifecycle post start
+				if tt.hasPostStartLifecycle {
+					if mainContainer.Lifecycle == nil || mainContainer.Lifecycle.PostStart == nil {
+						t.Error("expected PostStart lifecycle handler, got nil")
+					} else if tt.hasPostStartCommand {
+						// Verify that the command was set from config
+						if mainContainer.Lifecycle.PostStart.Exec == nil {
+							t.Error("expected Exec action in PostStart, got nil")
+						} else if len(mainContainer.Lifecycle.PostStart.Exec.Command) == 0 {
+							t.Error("expected PostStart command to be set from config, got empty")
+						}
+					}
+				} else {
+					// When no container exists, lifecycle should not be checked
+					if mainContainer.Lifecycle != nil && mainContainer.Lifecycle.PostStart != nil {
+						t.Error("expected no PostStart lifecycle handler, but got one")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSetMainContainerWhenInjectCSISidecar(t *testing.T) {
+	tests := []struct {
+		name                string
+		mainContainer       *corev1.Container
+		config              SidecarInjectConfig
+		expectedEnvCount    int
+		expectedVolumeMount int
+	}{
+		{
+			name: "empty container with full config",
+			mainContainer: &corev1.Container{
+				Name:  "main",
+				Image: "nginx:latest",
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{
+						{Name: "ENV1", Value: "value1"},
+						{Name: "ENV2", Value: "value2"},
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "vol1", MountPath: "/vol1"},
+						{Name: "vol2", MountPath: "/vol2"},
+					},
+				},
+			},
+			expectedEnvCount:    2,
+			expectedVolumeMount: 2,
+		},
+		{
+			name: "container with existing envs - no duplicates",
+			mainContainer: &corev1.Container{
+				Name:  "main",
+				Image: "nginx:latest",
+				Env: []corev1.EnvVar{
+					{Name: "ENV1", Value: "existing"},
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{
+						{Name: "ENV1", Value: "new"},    // duplicate
+						{Name: "ENV2", Value: "value2"}, // new
+					},
+				},
+			},
+			expectedEnvCount:    2, // ENV1 (existing) + ENV2 (new)
+			expectedVolumeMount: 0,
+		},
+		{
+			name: "container with existing volume mounts - no duplicates",
+			mainContainer: &corev1.Container{
+				Name:  "main",
+				Image: "nginx:latest",
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: "vol1", MountPath: "/existing-vol1"},
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "vol1", MountPath: "/new-vol1"}, // duplicate
+						{Name: "vol2", MountPath: "/vol2"},     // new
+					},
+				},
+			},
+			expectedEnvCount:    0,
+			expectedVolumeMount: 2, // vol1 (existing) + vol2 (new)
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setMainContainerWhenInjectCSISidecar(tt.mainContainer, tt.config)
+
+			// Verify env count
+			if len(tt.mainContainer.Env) != tt.expectedEnvCount {
+				t.Errorf("expected %d env vars, got %d", tt.expectedEnvCount, len(tt.mainContainer.Env))
+			}
+
+			// Verify volume mount count
+			if len(tt.mainContainer.VolumeMounts) != tt.expectedVolumeMount {
+				t.Errorf("expected %d volume mounts, got %d", tt.expectedVolumeMount, len(tt.mainContainer.VolumeMounts))
+			}
+		})
+	}
+}
+
+func TestSetMainContainerConfigWhenInjectRuntimeSidecar(t *testing.T) {
+	tests := []struct {
+		name                     string
+		mainContainer            *corev1.Container
+		config                   SidecarInjectConfig
+		expectedEnvCount         int
+		expectedVolumeMountCount int
+		hasPostStart             bool
+		postStartCommand         []string
+	}{
+		{
+			name: "empty container with full config",
+			mainContainer: &corev1.Container{
+				Name:  "main",
+				Image: "nginx:latest",
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{
+						{Name: "ENVD_DIR", Value: "/mnt/envd"},
+						{Name: "GODEBUG", Value: "multipathtcp=0"},
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "envd-volume", MountPath: "/mnt/envd"},
+					},
+					Lifecycle: &corev1.Lifecycle{
+						PostStart: &corev1.LifecycleHandler{
+							Exec: &corev1.ExecAction{
+								Command: []string{"bash", "-c", "/mnt/envd/envd-run.sh"},
+							},
+						},
+					},
+				},
+			},
+			expectedEnvCount:         2,
+			expectedVolumeMountCount: 1,
+			hasPostStart:             true,
+			postStartCommand:         []string{"bash", "-c", "/mnt/envd/envd-run.sh"},
+		},
+		{
+			name: "container with existing lifecycle - should be overridden",
+			mainContainer: &corev1.Container{
+				Name:  "main",
+				Image: "nginx:latest",
+				Lifecycle: &corev1.Lifecycle{
+					PostStart: &corev1.LifecycleHandler{
+						Exec: &corev1.ExecAction{
+							Command: []string{"echo", "old"},
+						},
+					},
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{{Name: "ENV1", Value: "value1"}},
+					Lifecycle: &corev1.Lifecycle{
+						PostStart: &corev1.LifecycleHandler{
+							Exec: &corev1.ExecAction{
+								Command: []string{"echo", "new"},
+							},
+						},
+					},
+				},
+			},
+			expectedEnvCount:         1,
+			expectedVolumeMountCount: 0,
+			hasPostStart:             true,
+			postStartCommand:         []string{"echo", "new"},
+		},
+		{
+			name: "config without lifecycle - no override",
+			mainContainer: &corev1.Container{
+				Name:  "main",
+				Image: "nginx:latest",
+				Lifecycle: &corev1.Lifecycle{
+					PostStart: &corev1.LifecycleHandler{
+						Exec: &corev1.ExecAction{
+							Command: []string{"echo", "keep"},
+						},
+					},
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{{Name: "ENV1", Value: "value1"}},
+				},
+			},
+			expectedEnvCount:         1,
+			expectedVolumeMountCount: 0,
+			hasPostStart:             true, // keeps existing
+			postStartCommand:         []string{"echo", "keep"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setMainContainerConfigWhenInjectRuntimeSidecar(context.TODO(), tt.mainContainer, tt.config)
+
+			// Verify env count
+			if len(tt.mainContainer.Env) != tt.expectedEnvCount {
+				t.Errorf("expected %d env vars, got %d", tt.expectedEnvCount, len(tt.mainContainer.Env))
+			}
+
+			// Verify volume mount count
+			if len(tt.mainContainer.VolumeMounts) != tt.expectedVolumeMountCount {
+				t.Errorf("expected %d volume mounts, got %d", tt.expectedVolumeMountCount, len(tt.mainContainer.VolumeMounts))
+			}
+
+			// Verify PostStart lifecycle
+			if tt.hasPostStart && tt.postStartCommand != nil {
+				if tt.mainContainer.Lifecycle == nil || tt.mainContainer.Lifecycle.PostStart == nil {
+					t.Error("expected PostStart lifecycle handler, got nil")
+				} else if tt.mainContainer.Lifecycle.PostStart.Exec == nil {
+					t.Error("expected Exec action in PostStart, got nil")
+				} else if len(tt.mainContainer.Lifecycle.PostStart.Exec.Command) != len(tt.postStartCommand) {
+					t.Errorf("expected command %v, got %v", tt.postStartCommand, tt.mainContainer.Lifecycle.PostStart.Exec.Command)
+				}
+			}
+		})
+	}
+}
+
+func TestFetchInjectionConfiguration(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name          string
+		configMap     *corev1.ConfigMap
+		getError      error
+		expectedData  map[string]string
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "successful fetch",
+			configMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      sandboxInjectionConfigName,
+					Namespace: getTestNamespace(),
+				},
+				Data: map[string]string{
+					KEY_CSI_INJECTION_CONFIG:     `{"mainContainer":{},"csiSidecar":[],"volume":[]}`,
+					KEY_RUNTIME_INJECTION_CONFIG: `{"mainContainer":{},"csiSidecar":[],"volume":[]}`,
+				},
+			},
+			expectedData: map[string]string{
+				KEY_CSI_INJECTION_CONFIG:     `{"mainContainer":{},"csiSidecar":[],"volume":[]}`,
+				KEY_RUNTIME_INJECTION_CONFIG: `{"mainContainer":{},"csiSidecar":[],"volume":[]}`,
+			},
+			expectError: false,
+		},
+		{
+			name:          "configmap not found",
+			configMap:     nil,
+			getError:      nil,
+			expectedData:  nil,
+			expectError:   false,
+			errorContains: "",
+		},
+		{
+			name: "empty configmap data",
+			configMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      sandboxInjectionConfigName,
+					Namespace: getTestNamespace(),
+				},
+				Data: map[string]string{},
+			},
+			expectedData: map[string]string{},
+			expectError:  false,
+		},
+		{
+			name: "configmap with partial data",
+			configMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      sandboxInjectionConfigName,
+					Namespace: getTestNamespace(),
+				},
+				Data: map[string]string{
+					KEY_CSI_INJECTION_CONFIG: `{"mainContainer":{"env":[{"name":"ENV1","value":"val1"}]},"csiSidecar":[],"volume":[]}`,
+				},
+			},
+			expectedData: map[string]string{
+				KEY_CSI_INJECTION_CONFIG: `{"mainContainer":{"env":[{"name":"ENV1","value":"val1"}]},"csiSidecar":[],"volume":[]}`,
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create fake client
+			initObjs := []client.Object{}
+			if tt.configMap != nil {
+				initObjs = append(initObjs, tt.configMap)
+			}
+			fakeClient := fake.NewClientBuilder().
+				WithObjects(initObjs...).
+				Build()
+
+			control := &commonControl{
+				Client: fakeClient,
+			}
+
+			// Call the function
+			data, err := fetchInjectionConfiguration(ctx, control.Client)
+
+			// Verify results
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				} else if tt.errorContains != "" && !strings.Contains(err.Error(), tt.errorContains) {
+					t.Errorf("expected error to contain %q, got %q", tt.errorContains, err.Error())
+				}
+				if data != nil {
+					t.Error("expected nil data on error, got non-nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				// Compare map lengths first for better error messages
+				if len(data) != len(tt.expectedData) {
+					t.Errorf("expected data length %d, got %d", len(tt.expectedData), len(data))
+				}
+				// Then compare individual keys and values
+				for key, expectedValue := range tt.expectedData {
+					if actualValue, exists := data[key]; !exists {
+						t.Errorf("expected key %q to exist in data", key)
+					} else if actualValue != expectedValue {
+						t.Errorf("for key %q: expected value %q, got %q", key, expectedValue, actualValue)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestParseCSIMountConfig(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name           string
+		configRaw      map[string]string
+		expectedConfig SidecarInjectConfig
+		expectError    bool
+		errorContains  string
+	}{
+		{
+			name: "valid CSI config",
+			configRaw: map[string]string{
+				KEY_CSI_INJECTION_CONFIG: `{
+					"mainContainer": {
+						"env": [
+							{"name": "ENV1", "value": "value1"},
+							{"name": "ENV2", "value": "value2"}
+						],
+						"volumeMounts": [
+							{"name": "vol1", "mountPath": "/mnt/vol1"}
+						]
+					},
+					"csiSidecar": [
+						{"name": "csi-sidecar", "image": "csi:latest"}
+					],
+					"volume": [
+						{"name": "vol1", "emptyDir": {}}
+					]
+				}`,
+			},
+			expectedConfig: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{
+						{Name: "ENV1", Value: "value1"},
+						{Name: "ENV2", Value: "value2"},
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "vol1", MountPath: "/mnt/vol1"},
+					},
+				},
+				Sidecars: []corev1.Container{
+					{Name: "csi-sidecar", Image: "csi:latest"},
+				},
+				Volumes: []corev1.Volume{
+					{Name: "vol1", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "empty CSI config",
+			configRaw: map[string]string{
+				KEY_CSI_INJECTION_CONFIG: `{"mainContainer":{},"csiSidecar":[],"volume":[]}`,
+			},
+			expectedConfig: SidecarInjectConfig{
+				MainContainer: corev1.Container{},
+				Sidecars:      []corev1.Container{},
+				Volumes:       []corev1.Volume{},
+			},
+			expectError: false,
+		},
+		{
+			name: "missing CSI config key",
+			configRaw: map[string]string{
+				"other-key": "some-value",
+			},
+			expectedConfig: SidecarInjectConfig{},
+			expectError:    false,
+			errorContains:  "",
+		},
+		{
+			name: "invalid JSON format",
+			configRaw: map[string]string{
+				KEY_CSI_INJECTION_CONFIG: `{"mainContainer": invalid json}`,
+			},
+			expectedConfig: SidecarInjectConfig{},
+			expectError:    true,
+			errorContains:  "invalid character",
+		},
+		{
+			name: "partial config with only sidecars",
+			configRaw: map[string]string{
+				KEY_CSI_INJECTION_CONFIG: `{"mainContainer":{},"csiSidecar":[{"name":"sidecar1","image":"img1"}],"volume":[]}`,
+			},
+			expectedConfig: SidecarInjectConfig{
+				MainContainer: corev1.Container{},
+				Sidecars: []corev1.Container{
+					{Name: "sidecar1", Image: "img1"},
+				},
+				Volumes: []corev1.Volume{},
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config, err := parseInjectConfig(ctx, KEY_CSI_INJECTION_CONFIG, tt.configRaw)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				} else if tt.errorContains != "" && !strings.Contains(err.Error(), tt.errorContains) {
+					t.Errorf("expected error to contain %q, got %q", tt.errorContains, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if !reflect.DeepEqual(config, tt.expectedConfig) {
+					t.Errorf("config mismatch:\nexpected: %v\ngot:      %v", tt.expectedConfig, config)
+				}
+			}
+		})
+	}
+}
+
+func TestParseAgentRuntimeConfig(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name           string
+		configRaw      map[string]string
+		expectedConfig SidecarInjectConfig
+		expectError    bool
+		errorContains  string
+	}{
+		{
+			name: "valid runtime config",
+			configRaw: map[string]string{
+				KEY_RUNTIME_INJECTION_CONFIG: `{
+					"mainContainer": {
+						"env": [
+							{"name": "ENVD_DIR", "value": "/mnt/envd"},
+							{"name": "GODEBUG", "value": "multipathtcp=0"}
+						],
+						"volumeMounts": [
+							{"name": "envd-volume", "mountPath": "/mnt/envd"}
+						],
+						"lifecycle": {
+							"postStart": {
+								"exec": {
+									"command": ["bash", "-c", "/mnt/envd/envd-run.sh"]
+								}
+							}
+						}
+					},
+					"csiSidecar": [
+						{
+							"name": "init-runtime",
+							"image": "runtime:latest",
+							"command": ["sh", "/workspace/entrypoint_inner.sh"]
+						}
+					],
+					"volume": [
+						{"name": "envd-volume", "emptyDir": {}}
+					]
+				}`,
+			},
+			expectedConfig: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{
+						{Name: "ENVD_DIR", Value: "/mnt/envd"},
+						{Name: "GODEBUG", Value: "multipathtcp=0"},
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "envd-volume", MountPath: "/mnt/envd"},
+					},
+					Lifecycle: &corev1.Lifecycle{
+						PostStart: &corev1.LifecycleHandler{
+							Exec: &corev1.ExecAction{
+								Command: []string{"bash", "-c", "/mnt/envd/envd-run.sh"},
+							},
+						},
+					},
+				},
+				Sidecars: []corev1.Container{
+					{
+						Name:    "init-runtime",
+						Image:   "runtime:latest",
+						Command: []string{"sh", "/workspace/entrypoint_inner.sh"},
+					},
+				},
+				Volumes: []corev1.Volume{
+					{Name: "envd-volume", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "empty runtime config",
+			configRaw: map[string]string{
+				KEY_RUNTIME_INJECTION_CONFIG: `{"mainContainer":{},"csiSidecar":[],"volume":[]}`,
+			},
+			expectedConfig: SidecarInjectConfig{
+				MainContainer: corev1.Container{},
+				Sidecars:      []corev1.Container{},
+				Volumes:       []corev1.Volume{},
+			},
+			expectError: false,
+		},
+		{
+			name: "missing runtime config key",
+			configRaw: map[string]string{
+				"other-key": "some-value",
+			},
+			expectedConfig: SidecarInjectConfig{
+				MainContainer: corev1.Container{},
+				Sidecars:      nil,
+				Volumes:       nil,
+			},
+			expectError:   false,
+			errorContains: "",
+		},
+		{
+			name: "invalid JSON format",
+			configRaw: map[string]string{
+				KEY_RUNTIME_INJECTION_CONFIG: `not valid json`,
+			},
+			expectedConfig: SidecarInjectConfig{},
+			expectError:    true,
+			errorContains:  "invalid character",
+		},
+		{
+			name: "partial config with only main container env",
+			configRaw: map[string]string{
+				KEY_RUNTIME_INJECTION_CONFIG: `{"mainContainer":{"env":[{"name":"POD_UID","valueFrom":{"fieldRef":{"fieldPath":"metadata.uid"}}}]},"csiSidecar":[],"volume":[]}`,
+			},
+			expectedConfig: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{
+						{
+							Name: "POD_UID",
+							ValueFrom: &corev1.EnvVarSource{
+								FieldRef: &corev1.ObjectFieldSelector{
+									FieldPath: "metadata.uid",
+								},
+							},
+						},
+					},
+				},
+				Sidecars: []corev1.Container{},
+				Volumes:  []corev1.Volume{},
+			},
+			expectError: false,
+		},
+		{
+			name: "complex lifecycle with multiple commands",
+			configRaw: map[string]string{
+				KEY_RUNTIME_INJECTION_CONFIG: `{
+					"mainContainer": {
+						"lifecycle": {
+							"postStart": {
+								"exec": {
+									"command": ["bash", "-c", "echo start && /run.sh"]
+								}
+							}
+						}
+					},
+					"csiSidecar": [],
+					"volume": []
+				}`,
+			},
+			expectedConfig: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Lifecycle: &corev1.Lifecycle{
+						PostStart: &corev1.LifecycleHandler{
+							Exec: &corev1.ExecAction{
+								Command: []string{"bash", "-c", "echo start && /run.sh"},
+							},
+						},
+					},
+				},
+				Sidecars: []corev1.Container{},
+				Volumes:  []corev1.Volume{},
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config, err := parseInjectConfig(ctx, KEY_RUNTIME_INJECTION_CONFIG, tt.configRaw)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				} else if tt.errorContains != "" && !strings.Contains(err.Error(), tt.errorContains) {
+					t.Errorf("expected error to contain %q, got %q", tt.errorContains, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if !compareSidecarInjectConfigs(config, tt.expectedConfig) {
+					t.Errorf("config mismatch:\nexpected: %#v\ngot:      %#v", tt.expectedConfig, config)
+				}
+			}
+		})
+	}
+}
+
+// compareSidecarInjectConfigs compares two SidecarInjectConfig structs deeply
+func compareSidecarInjectConfigs(a, b SidecarInjectConfig) bool {
+	return reflect.DeepEqual(a.MainContainer, b.MainContainer) &&
+		reflect.DeepEqual(a.Sidecars, b.Sidecars) &&
+		reflect.DeepEqual(a.Volumes, b.Volumes)
+}
