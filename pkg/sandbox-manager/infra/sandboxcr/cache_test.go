@@ -5,13 +5,6 @@ import (
 	"testing"
 	"time"
 
-	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	sandboxfake "github.com/openkruise/agents/client/clientset/versioned/fake"
-	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
-	"github.com/openkruise/agents/pkg/sandbox-manager/config"
-	constantUtils "github.com/openkruise/agents/pkg/utils"
-	sandboxManagerUtils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
-	utils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -20,6 +13,14 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
+
+	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	sandboxfake "github.com/openkruise/agents/client/clientset/versioned/fake"
+	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
+	"github.com/openkruise/agents/pkg/sandbox-manager/config"
+	constantUtils "github.com/openkruise/agents/pkg/utils"
+	sandboxManagerUtils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
+	utils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
 )
 
 func TestCache_WaitForSandboxSatisfied(t *testing.T) {
@@ -443,6 +444,38 @@ func TestCache_GetSecret_FromSync(t *testing.T) {
 	assert.Equal(t, constantUtils.DefaultSandboxDeployNamespace, result.Namespace)
 	assert.Equal(t, testSecret.Data, result.Data)
 	assert.Equal(t, testSecret.Type, result.Type)
+}
+
+func TestCache_GetConfigmap_FromSync(t *testing.T) {
+	sandboxManagerUtils.InitLogOutput()
+
+	cache, clientSet, err := NewTestCache(t)
+	require.NoError(t, err)
+	defer cache.Stop()
+	k8sClient := clientSet.K8sClient
+
+	testConfigMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-configmap-sync",
+			Namespace: constantUtils.DefaultSandboxDeployNamespace,
+		},
+		Data: map[string]string{
+			"key1": "value1",
+			"key2": "value2",
+		},
+	}
+	// Create the configmap in the cluster using the client
+	_, err = k8sClient.CoreV1().ConfigMaps(constantUtils.DefaultSandboxDeployNamespace).Create(context.TODO(), testConfigMap, metav1.CreateOptions{})
+	assert.NoError(t, err)
+	// Wait for cache to be ready
+	time.Sleep(300 * time.Millisecond)
+	// Verify that the configmap is found in cache
+	result, err := cache.GetConfigmap(constantUtils.DefaultSandboxDeployNamespace, "test-configmap-sync")
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "test-configmap-sync", result.Name)
+	assert.Equal(t, constantUtils.DefaultSandboxDeployNamespace, result.Namespace)
+	assert.Equal(t, testConfigMap.Data, result.Data)
 }
 
 func TestCache_InformerWithFilter_GetSandboxSet(t *testing.T) {

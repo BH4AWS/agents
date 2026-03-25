@@ -39,6 +39,7 @@ type Cache struct {
 	sandboxTemplateInformer        cache.SharedIndexInformer
 	persistentVolumeInformer       cache.SharedIndexInformer
 	secretInformer                 cache.SharedIndexInformer
+	configmapInformer              cache.SharedIndexInformer
 	stopCh                         chan struct{}
 	waitHooks                      *sync.Map // Key: client.ObjectKey; Value: *waitEntry
 	listSandboxesGroup             singleflight.Group
@@ -69,6 +70,7 @@ func NewCache(client *clients.ClientSet, opts config.SandboxManagerOptions) (*Ca
 	k8sInformerFactoryWithSystemNs := k8sinformers.NewSharedInformerFactoryWithOptions(client.K8sClient, time.Minute*10, k8sinformers.WithNamespace(opts.SystemNamespace))
 	// to generate informers only for the specified namespace to avoid potential security privilege escalation risks.
 	secretInformer := k8sInformerFactoryWithSystemNs.Core().V1().Secrets().Informer()
+	configmapInformer := k8sInformerFactoryWithSystemNs.Core().V1().ConfigMaps().Informer()
 
 	if err := AddIndexersToSandboxInformer(sandboxInformer); err != nil {
 		return nil, err
@@ -85,6 +87,7 @@ func NewCache(client *clients.ClientSet, opts config.SandboxManagerOptions) (*Ca
 		k8sInformerFactory:             k8sInformerFactory,
 		k8sInformerFactoryWithSystemNs: k8sInformerFactoryWithSystemNs,
 		secretInformer:                 secretInformer,
+		configmapInformer:              configmapInformer,
 		sandboxInformer:                sandboxInformer,
 		sandboxSetInformer:             sandboxSetInformer,
 		checkpointInformer:             checkpointInformer,
@@ -134,6 +137,7 @@ func (c *Cache) Run(ctx context.Context) error {
 		c.sandboxTemplateInformer.HasSynced,
 		c.persistentVolumeInformer.HasSynced,
 		c.secretInformer.HasSynced,
+		c.configmapInformer.HasSynced,
 		c.checkpointInformer.HasSynced) {
 		return fmt.Errorf("timed out waiting for caches to sync")
 	}
@@ -389,6 +393,22 @@ func (c *Cache) GetSecret(namespace, name string) (*corev1.Secret, error) {
 		return secret, nil
 	}
 	return nil, fmt.Errorf("object with key %s is not a Secret", key)
+}
+
+// GetConfigmap retrieves a Configmap from the cache by namespace and name
+func (c *Cache) GetConfigmap(namespace, name string) (*corev1.ConfigMap, error) {
+	key := fmt.Sprintf("%s/%s", namespace, name)
+	obj, exists, err := c.configmapInformer.GetStore().GetByKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get configmap %s/%s from cache: %v", namespace, name, err)
+	}
+	if !exists {
+		return nil, fmt.Errorf("configmap %s/%s not found in cache", namespace, name)
+	}
+	if configmap, ok := obj.(*corev1.ConfigMap); ok {
+		return configmap, nil
+	}
+	return nil, fmt.Errorf("object with key %s is not a Configmap object", key)
 }
 
 func (c *Cache) GetCheckpoint(checkpointID string) (*agentsv1alpha1.Checkpoint, error) {

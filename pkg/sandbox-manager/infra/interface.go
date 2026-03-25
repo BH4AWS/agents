@@ -69,6 +69,7 @@ type Sandbox interface {
 type CacheProvider interface {
 	GetPersistentVolume(name string) (*corev1.PersistentVolume, error)
 	GetSecret(namespace, name string) (*corev1.Secret, error)
+	GetConfigmap(namespace, name string) (*corev1.ConfigMap, error)
 	GetClaimedSandbox(sandboxID string) (*agentsv1alpha1.Sandbox, error)
 	ListSandboxWithUser(user string) ([]*agentsv1alpha1.Sandbox, error)
 	ListSandboxesInPool(pool string) ([]*agentsv1alpha1.Sandbox, error)

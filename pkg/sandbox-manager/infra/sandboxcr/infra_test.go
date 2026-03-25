@@ -6,13 +6,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
-	"github.com/openkruise/agents/pkg/sandbox-manager/config"
-	testutils "github.com/openkruise/agents/test/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
+	"github.com/openkruise/agents/pkg/sandbox-manager/config"
+	testutils "github.com/openkruise/agents/test/utils"
 
 	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/proxy"
@@ -623,7 +624,7 @@ func TestInfra_CloneSandbox(t *testing.T) {
 
 	// Decorator: DefaultCreateSandbox - set sandbox ready after creation
 	origCreateSandbox := DefaultCreateSandbox
-	DefaultCreateSandbox = func(ctx context.Context, sbx *v1alpha1.Sandbox, cli *clients.ClientSet) (*v1alpha1.Sandbox, error) {
+	DefaultCreateSandbox = func(ctx context.Context, sbx *v1alpha1.Sandbox, cli *clients.ClientSet, cache infra.CacheProvider) (*v1alpha1.Sandbox, error) {
 		if override, ok := ctx.Value(infraSbxOverrideKey{}).(infraSbxOverride); ok {
 			if override.Name != "" {
 				sbx.Name = override.Name
@@ -635,7 +636,7 @@ func TestInfra_CloneSandbox(t *testing.T) {
 				sbx.Annotations[v1alpha1.AnnotationRuntimeURL] = override.RuntimeURL
 			}
 		}
-		created, err := origCreateSandbox(ctx, sbx, cli)
+		created, err := origCreateSandbox(ctx, sbx, cli, cache)
 		if err != nil {
 			return nil, err
 		}

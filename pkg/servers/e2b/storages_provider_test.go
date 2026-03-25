@@ -992,6 +992,19 @@ func (m *mockCacheProvider) GetSecret(namespace, name string) (*corev1.Secret, e
 	}, nil
 }
 
+func (m *mockCacheProvider) GetConfigmap(namespace, name string) (*corev1.ConfigMap, error) {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      name,
+		},
+		Data: map[string]string{
+			"key1": "value1",
+			"key2": "value2",
+		},
+	}, nil
+}
+
 func (m *mockCacheProvider) GetClaimedSandbox(sandboxID string) (*agentsv1alpha1.Sandbox, error) {
 	return nil, fmt.Errorf("not implemented for PV cache mock")
 }

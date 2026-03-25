@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	commonutils "github.com/openkruise/agents/pkg/utils"
 	"golang.org/x/time/rate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,6 +20,8 @@ import (
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	commonutils "github.com/openkruise/agents/pkg/utils"
 
 	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/controller/sandboxset"
@@ -131,7 +132,7 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 		return
 	}
 
-	err = performLockSandbox(ctx, sbx, lockType, opts, client)
+	err = performLockSandbox(ctx, sbx, lockType, opts, client, cache)
 	if err != nil {
 		// TODO: these lines cannot be covered by tests currently, which will be fixed when the cache is converted to controller-runtime
 		log.Error(err, "failed to lock sandbox")
@@ -444,7 +445,7 @@ func modifyPickedSandbox(sbx *Sandbox, lockType infra.LockType, opts infra.Claim
 
 var DefaultCreateSandbox = createSandbox
 
-func createSandbox(ctx context.Context, sbx *v1alpha1.Sandbox, client *clients.ClientSet) (*v1alpha1.Sandbox, error) {
+func createSandbox(ctx context.Context, sbx *v1alpha1.Sandbox, client *clients.ClientSet, cache infra.CacheProvider) (*v1alpha1.Sandbox, error) {
 	select {
 	case <-ctx.Done():
 		return nil, fmt.Errorf("context canceled before creating sandbox: %w", ctx.Err())
@@ -453,7 +454,7 @@ func createSandbox(ctx context.Context, sbx *v1alpha1.Sandbox, client *clients.C
 	return client.ApiV1alpha1().Sandboxes(sbx.Namespace).Create(ctx, sbx, metav1.CreateOptions{})
 }
 
-func performLockSandbox(ctx context.Context, sbx *Sandbox, lockType infra.LockType, opts infra.ClaimSandboxOptions, client *clients.ClientSet) error {
+func performLockSandbox(ctx context.Context, sbx *Sandbox, lockType infra.LockType, opts infra.ClaimSandboxOptions, client *clients.ClientSet, cache infra.CacheProvider) error {
 	ctx = logs.Extend(ctx, "action", "performLockSandbox")
 	log := klog.FromContext(ctx)
 	utils.LockSandbox(sbx.Sandbox, opts.LockString, opts.User)
@@ -461,7 +462,7 @@ func performLockSandbox(ctx context.Context, sbx *Sandbox, lockType infra.LockTy
 	var err error
 	if lockType == infra.LockTypeCreate {
 		log.Info("locking new sandbox via create", "sandbox", klog.KObj(sbx.Sandbox))
-		updated, err = DefaultCreateSandbox(ctx, sbx.Sandbox, client)
+		updated, err = DefaultCreateSandbox(ctx, sbx.Sandbox, client, cache)
 	} else {
 		log.Info("locking existing sandbox via update", "sandbox", klog.KObj(sbx.Sandbox))
 		updated, err = client.ApiV1alpha1().Sandboxes(sbx.Namespace).Update(ctx, sbx.Sandbox, metav1.UpdateOptions{})

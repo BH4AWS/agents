@@ -7,9 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openkruise/agents/pkg/proxy"
-	"github.com/openkruise/agents/pkg/sandbox-manager/config"
-	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -17,6 +14,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
+
+	"github.com/openkruise/agents/pkg/proxy"
+	"github.com/openkruise/agents/pkg/sandbox-manager/config"
+	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/client/clientset/versioned"
@@ -778,13 +779,13 @@ func TestSandboxManager_CloneSandbox(t *testing.T) {
 
 			// Decorator: DefaultCreateSandbox - set sandbox ready after creation
 			origCreateSandbox := sandboxcr.DefaultCreateSandbox
-			sandboxcr.DefaultCreateSandbox = func(ctx context.Context, sbx *agentsv1alpha1.Sandbox, c *clients.ClientSet) (*agentsv1alpha1.Sandbox, error) {
+			sandboxcr.DefaultCreateSandbox = func(ctx context.Context, sbx *agentsv1alpha1.Sandbox, c *clients.ClientSet, cache infra.CacheProvider) (*agentsv1alpha1.Sandbox, error) {
 				if override, ok := ctx.Value(sbxOverrideKey{}).(sbxOverride); ok {
 					if override.Name != "" {
 						sbx.Name = override.Name
 					}
 				}
-				created, err := origCreateSandbox(ctx, sbx, c)
+				created, err := origCreateSandbox(ctx, sbx, c, cache)
 				if err != nil {
 					return nil, err
 				}

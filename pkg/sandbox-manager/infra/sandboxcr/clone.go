@@ -5,16 +5,17 @@ import (
 	"fmt"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
+	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
+
 	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/utils"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/util/retry"
-	"k8s.io/klog/v2"
-	"k8s.io/utils/ptr"
 )
 
 var (
@@ -168,7 +169,7 @@ func stepCreateSandboxFromCheckpoint(ctx context.Context, opts infra.CloneSandbo
 	}
 	DefaultPostProcessClonedSandbox(sbx.Sandbox)
 	log.Info("creating new sandbox from checkpoint")
-	sbx.Sandbox, err = DefaultCreateSandbox(ctx, sbx.Sandbox, client)
+	sbx.Sandbox, err = DefaultCreateSandbox(ctx, sbx.Sandbox, client, cache)
 	if err != nil {
 		log.Error(err, "failed to create sandbox")
 		return nil, nil, metrics, err

@@ -7,13 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
-	"github.com/openkruise/agents/pkg/sandbox-manager/config"
-	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
-	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
-	utils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
-	testutils "github.com/openkruise/agents/test/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
@@ -21,6 +14,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+
+	"github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
+	"github.com/openkruise/agents/pkg/sandbox-manager/config"
+	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
+	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	utils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
+	testutils "github.com/openkruise/agents/test/utils"
 )
 
 func TestValidateAndInitCloneOptions(t *testing.T) {
@@ -135,7 +136,7 @@ func TestCloneSandbox(t *testing.T) {
 
 	// Decorator: DefaultCreateSandbox - set sandbox ready after creation
 	origCreateSandbox := DefaultCreateSandbox
-	DefaultCreateSandbox = func(ctx context.Context, sbx *v1alpha1.Sandbox, client *clients.ClientSet) (*v1alpha1.Sandbox, error) {
+	DefaultCreateSandbox = func(ctx context.Context, sbx *v1alpha1.Sandbox, client *clients.ClientSet, cache infra.CacheProvider) (*v1alpha1.Sandbox, error) {
 		if override, ok := ctx.Value(sbxOverrideKey{}).(sbxOverride); ok {
 			if override.Name != "" {
 				sbx.Name = override.Name
@@ -153,7 +154,7 @@ func TestCloneSandbox(t *testing.T) {
 				sbx.Annotations[v1alpha1.AnnotationRuntimeAccessToken] = override.AccessToken
 			}
 		}
-		created, err := origCreateSandbox(ctx, sbx, client)
+		created, err := origCreateSandbox(ctx, sbx, client, cache)
 		if err != nil {
 			return nil, err
 		}
