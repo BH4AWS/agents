@@ -806,7 +806,7 @@ func TestNewSandboxFromTemplate_RateLimitExceeded(t *testing.T) {
 	}
 
 	// Call the function
-	sbx, _, err := newSandboxFromSandboxSet(opts, infraInstance.Cache, infraInstance.Client.SandboxClient, limiter)
+	sbx, _, err := newSandboxFromSandboxSet(opts, infraInstance.Cache, infraInstance.Client, limiter)
 
 	// Assertions
 	assert.Nil(t, sbx, "sandbox should be nil when rate limited")

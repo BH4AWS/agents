@@ -62,6 +62,7 @@ func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models
 		ClaimTimeout: time.Duration(request.Extensions.TimeoutSeconds) * time.Second,
 		Modifier: func(sbx infra.Sandbox) {
 			sc.basicSandboxCreateModifier(ctx, sbx, request)
+			// record the basic csi mount persistent volume config to sandbox
 			sc.csiMountOptionsConfigRecord(ctx, sbx, request)
 		},
 		ReserveFailedSandbox: request.Extensions.ReserveFailedSandbox,
