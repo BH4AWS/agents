@@ -60,6 +60,7 @@ func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models
 		ClaimTimeout: time.Duration(request.Extensions.TimeoutSeconds) * time.Second,
 		Modifier: func(sbx infra.Sandbox) {
 			sc.basicSandboxCreateModifier(ctx, sbx, request)
+			sc.csiMountOptionsConfigRecord(ctx, sbx, request)
 		},
 		ReserveFailedSandbox: request.Extensions.ReserveFailedSandbox,
 		CreateOnNoStock:      request.Extensions.CreateOnNoStock,
@@ -255,5 +256,26 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 	for k, v := range request.Metadata {
 		annotations[k] = v
 	}
+	sbx.SetAnnotations(annotations)
+}
+
+func (sc *Controller) csiMountOptionsConfigRecord(ctx context.Context, sbx infra.Sandbox, request models.NewSandboxRequest) {
+	log := klog.FromContext(ctx)
+	// fetch the csi mount config from request
+	if len(request.Extensions.CSIMount.MountConfigs) == 0 {
+		return
+	}
+	// marshal the csi mount confit to json
+	csiMountConfigRaw, err := json.Marshal(request.Extensions.CSIMount.MountConfigs)
+	if err != nil {
+		log.Info("failed to marshal csi mount config", err)
+		return
+	}
+	annotations := sbx.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	// record the csi mount config to annotation
+	annotations[models.ExtensionKeyClaimWithCSIMount_MountConfig] = string(csiMountConfigRaw)
 	sbx.SetAnnotations(annotations)
 }
