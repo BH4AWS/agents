@@ -71,6 +71,16 @@ spec:
                 items:
                   type: string
                 type: array
+              runtimes:
+                description: Runtimes - Runtime configuration for sandbox object
+                items:
+                  properties:
+                    name:
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
               shutdownTime:
                 description: |-
                   ShutdownTime - Absolute time when the sandbox is deleted.

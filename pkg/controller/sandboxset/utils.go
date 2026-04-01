@@ -6,13 +6,14 @@ import (
 	"strings"
 	"time"
 
-	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/utils/expectations"
 	apps "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+
+	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/utils/expectations"
 )
 
 var (
@@ -167,6 +168,7 @@ func NewSandboxFromSandboxSet(sbs *agentsv1alpha1.SandboxSet) *agentsv1alpha1.Sa
 		},
 		Spec: agentsv1alpha1.SandboxSpec{
 			PersistentContents: sbs.Spec.PersistentContents,
+			Runtimes:           sbs.Spec.Runtimes,
 			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 				TemplateRef:          sbs.Spec.TemplateRef,
 				Template:             template,

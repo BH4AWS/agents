@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // getTestNamespace returns the namespace used for testing
@@ -266,8 +267,8 @@ func TestSetAgentRuntimeContainer(t *testing.T) {
 			expectedInitContainers:   3,
 			expectedContainers:       1,
 			expectedEnvCount:         1,
-			hasPostStartLifecycle:    true,  // Function creates empty PostStart handler
-			hasPostStartCommand:      false, // But doesn't set command if config doesn't have one
+			hasPostStartLifecycle:    false, // No PostStart when config doesn't have valid handler
+			hasPostStartCommand:      false,
 			expectedVolumeMountCount: 0,
 		},
 		{
@@ -286,7 +287,7 @@ func TestSetAgentRuntimeContainer(t *testing.T) {
 			expectedInitContainers:   1,
 			expectedContainers:       1,
 			expectedEnvCount:         0,
-			hasPostStartLifecycle:    true, // Function creates empty PostStart handler
+			hasPostStartLifecycle:    false, // No PostStart when config doesn't have valid handler
 			hasPostStartCommand:      false,
 			expectedVolumeMountCount: 0,
 		},
@@ -336,12 +337,12 @@ func TestSetAgentRuntimeContainer(t *testing.T) {
 			expectedInitContainers:   3,
 			expectedContainers:       1,
 			expectedEnvCount:         1,
-			hasPostStartLifecycle:    true,  // Function creates empty PostStart handler
-			hasPostStartCommand:      false, // But doesn't set command if config doesn't have one
+			hasPostStartLifecycle:    false, // No PostStart when config doesn't have valid handler
+			hasPostStartCommand:      false,
 			expectedVolumeMountCount: 1,
 		},
 		{
-			name: "override existing lifecycle with config",
+			name: "existing lifecycle - conflicting postStart should skip env and volumeMounts injection",
 			template: &corev1.PodSpec{
 				Containers: []corev1.Container{
 					{
@@ -360,6 +361,9 @@ func TestSetAgentRuntimeContainer(t *testing.T) {
 			config: SidecarInjectConfig{
 				MainContainer: corev1.Container{
 					Env: []corev1.EnvVar{{Name: "ENV1", Value: "value1"}},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "vol1", MountPath: "/vol1"},
+					},
 					Lifecycle: &corev1.Lifecycle{
 						PostStart: &corev1.LifecycleHandler{
 							Exec: &corev1.ExecAction{
@@ -374,10 +378,10 @@ func TestSetAgentRuntimeContainer(t *testing.T) {
 			},
 			expectedInitContainers:   1,
 			expectedContainers:       1,
-			expectedEnvCount:         1,
+			expectedEnvCount:         0, // conflicting postStart, skip env injection
 			hasPostStartLifecycle:    true,
-			hasPostStartCommand:      true,
-			expectedVolumeMountCount: 0,
+			hasPostStartCommand:      true, // keeps existing command
+			expectedVolumeMountCount: 0,    // conflicting postStart, skip volumeMounts injection
 		},
 	}
 
@@ -560,7 +564,7 @@ func TestSetMainContainerConfigWhenInjectRuntimeSidecar(t *testing.T) {
 			postStartCommand:         []string{"bash", "-c", "/mnt/envd/envd-run.sh"},
 		},
 		{
-			name: "container with existing lifecycle - should be overridden",
+			name: "container with existing lifecycle - conflicting postStart should skip all injection",
 			mainContainer: &corev1.Container{
 				Name:  "main",
 				Image: "nginx:latest",
@@ -575,6 +579,9 @@ func TestSetMainContainerConfigWhenInjectRuntimeSidecar(t *testing.T) {
 			config: SidecarInjectConfig{
 				MainContainer: corev1.Container{
 					Env: []corev1.EnvVar{{Name: "ENV1", Value: "value1"}},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "vol1", MountPath: "/vol1"},
+					},
 					Lifecycle: &corev1.Lifecycle{
 						PostStart: &corev1.LifecycleHandler{
 							Exec: &corev1.ExecAction{
@@ -584,10 +591,10 @@ func TestSetMainContainerConfigWhenInjectRuntimeSidecar(t *testing.T) {
 					},
 				},
 			},
-			expectedEnvCount:         1,
-			expectedVolumeMountCount: 0,
+			expectedEnvCount:         0, // conflicting postStart, skip all injection
+			expectedVolumeMountCount: 0, // conflicting postStart, skip all injection
 			hasPostStart:             true,
-			postStartCommand:         []string{"echo", "new"},
+			postStartCommand:         []string{"echo", "old"}, // keeps existing, NOT overridden
 		},
 		{
 			name: "config without lifecycle - no override",
@@ -611,6 +618,75 @@ func TestSetMainContainerConfigWhenInjectRuntimeSidecar(t *testing.T) {
 			expectedVolumeMountCount: 0,
 			hasPostStart:             true, // keeps existing
 			postStartCommand:         []string{"echo", "keep"},
+		},
+		{
+			name: "container with empty Lifecycle - should apply config PostStart",
+			mainContainer: &corev1.Container{
+				Name:      "main",
+				Image:    "nginx:latest",
+				Lifecycle: &corev1.Lifecycle{}, // empty Lifecycle, no PostStart
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{{Name: "ENV1", Value: "value1"}},
+					Lifecycle: &corev1.Lifecycle{
+						PostStart: &corev1.LifecycleHandler{
+							Exec: &corev1.ExecAction{
+								Command: []string{"bash", "-c", "injected"},
+							},
+						},
+					},
+				},
+			},
+			expectedEnvCount:         1,
+			expectedVolumeMountCount: 0,
+			hasPostStart:             true,
+			postStartCommand:         []string{"bash", "-c", "injected"},
+		},
+		{
+			name: "container with empty PostStart handler - should apply config PostStart",
+			mainContainer: &corev1.Container{
+				Name:  "main",
+				Image: "nginx:latest",
+				Lifecycle: &corev1.Lifecycle{
+					PostStart: &corev1.LifecycleHandler{}, // empty handler, no Exec/HTTPGet/TCPSocket
+				},
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{{Name: "ENV1", Value: "value1"}},
+					Lifecycle: &corev1.Lifecycle{
+						PostStart: &corev1.LifecycleHandler{
+							Exec: &corev1.ExecAction{
+								Command: []string{"bash", "-c", "injected"},
+							},
+						},
+					},
+				},
+			},
+			expectedEnvCount:         1,
+			expectedVolumeMountCount: 0,
+			hasPostStart:             true,
+			postStartCommand:         []string{"bash", "-c", "injected"},
+		},
+		{
+			name: "config with empty PostStart handler - should not apply",
+			mainContainer: &corev1.Container{
+				Name:  "main",
+				Image: "nginx:latest",
+			},
+			config: SidecarInjectConfig{
+				MainContainer: corev1.Container{
+					Env: []corev1.EnvVar{{Name: "ENV1", Value: "value1"}},
+					Lifecycle: &corev1.Lifecycle{
+						PostStart: &corev1.LifecycleHandler{}, // empty handler
+					},
+				},
+			},
+			expectedEnvCount:         1,
+			expectedVolumeMountCount: 0,
+			hasPostStart:             false, // config has empty handler, should not apply
+			postStartCommand:         nil,
 		},
 	}
 
@@ -1049,6 +1125,69 @@ func TestIsContainersExists(t *testing.T) {
 			result := isContainersExists(tt.podContainers, tt.injectContainers)
 			if result != tt.expected {
 				t.Errorf("isContainersExists() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestHasValidLifecycleHandler(t *testing.T) {
+	tests := []struct {
+		name     string
+		handler  *corev1.LifecycleHandler
+		expected bool
+	}{
+		{
+			name:     "nil handler",
+			handler:  nil,
+			expected: false,
+		},
+		{
+			name:     "empty handler",
+			handler:  &corev1.LifecycleHandler{},
+			expected: false,
+		},
+		{
+			name: "handler with Exec action",
+			handler: &corev1.LifecycleHandler{
+				Exec: &corev1.ExecAction{
+					Command: []string{"echo", "hello"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "handler with HTTPGet action",
+			handler: &corev1.LifecycleHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: "/health",
+					Port: intstr.FromInt(8080),
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "handler with TCPSocket action",
+			handler: &corev1.LifecycleHandler{
+				TCPSocket: &corev1.TCPSocketAction{
+					Port: intstr.FromInt(8080),
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "handler with empty Exec (nil Command)",
+			handler: &corev1.LifecycleHandler{
+				Exec: &corev1.ExecAction{},
+			},
+			expected: true, // Exec is not nil, so it's valid even if Command is empty
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := hasValidLifecycleHandler(tt.handler)
+			if result != tt.expected {
+				t.Errorf("hasValidLifecycleHandler() = %v, expected %v", result, tt.expected)
 			}
 		})
 	}

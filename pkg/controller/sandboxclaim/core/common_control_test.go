@@ -923,6 +923,100 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "claim with runtimes",
+			claim: &agentsv1alpha1.SandboxClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-claim-runtimes",
+					Namespace: "default",
+					UID:       "test-uid-runtimes",
+				},
+				Spec: agentsv1alpha1.SandboxClaimSpec{
+					TemplateName: "test-template",
+					Runtimes: []agentsv1alpha1.RuntimeConfig{
+						{Name: agentsv1alpha1.RuntimeConfigForInjectCsiMount},
+						{Name: agentsv1alpha1.RuntimeConfigForInjectAgentRuntime},
+					},
+				},
+			},
+			sandboxSet: &agentsv1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-template",
+					Namespace: "default",
+				},
+			},
+			expectError: false,
+			validate: func(t *testing.T, opts infra.ClaimSandboxOptions) {
+				if opts.User != "test-uid-runtimes" {
+					t.Errorf("User = %v, want %v", opts.User, "test-uid-runtimes")
+				}
+				if len(opts.RuntimeConfig) != 2 {
+					t.Errorf("RuntimeConfig length = %v, want %v", len(opts.RuntimeConfig), 2)
+				}
+				if opts.RuntimeConfig[0].Name != agentsv1alpha1.RuntimeConfigForInjectCsiMount {
+					t.Errorf("RuntimeConfig[0].Name = %v, want %v", opts.RuntimeConfig[0].Name, agentsv1alpha1.RuntimeConfigForInjectCsiMount)
+				}
+				if opts.RuntimeConfig[1].Name != agentsv1alpha1.RuntimeConfigForInjectAgentRuntime {
+					t.Errorf("RuntimeConfig[1].Name = %v, want %v", opts.RuntimeConfig[1].Name, agentsv1alpha1.RuntimeConfigForInjectAgentRuntime)
+				}
+			},
+		},
+		{
+			name: "claim with single runtime",
+			claim: &agentsv1alpha1.SandboxClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-claim-single-runtime",
+					Namespace: "default",
+					UID:       "test-uid-single-runtime",
+				},
+				Spec: agentsv1alpha1.SandboxClaimSpec{
+					TemplateName: "test-template",
+					Runtimes: []agentsv1alpha1.RuntimeConfig{
+						{Name: agentsv1alpha1.RuntimeConfigForInjectCsiMount},
+					},
+				},
+			},
+			sandboxSet: &agentsv1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-template",
+					Namespace: "default",
+				},
+			},
+			expectError: false,
+			validate: func(t *testing.T, opts infra.ClaimSandboxOptions) {
+				if len(opts.RuntimeConfig) != 1 {
+					t.Errorf("RuntimeConfig length = %v, want %v", len(opts.RuntimeConfig), 1)
+				}
+				if opts.RuntimeConfig[0].Name != agentsv1alpha1.RuntimeConfigForInjectCsiMount {
+					t.Errorf("RuntimeConfig[0].Name = %v, want %v", opts.RuntimeConfig[0].Name, agentsv1alpha1.RuntimeConfigForInjectCsiMount)
+				}
+			},
+		},
+		{
+			name: "claim without runtimes should have nil RuntimeConfig",
+			claim: &agentsv1alpha1.SandboxClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-claim-no-runtime",
+					Namespace: "default",
+					UID:       "test-uid-no-runtime",
+				},
+				Spec: agentsv1alpha1.SandboxClaimSpec{
+					TemplateName: "test-template",
+				},
+			},
+			sandboxSet: &agentsv1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-template",
+					Namespace: "default",
+				},
+			},
+			expectError: false,
+			validate: func(t *testing.T, opts infra.ClaimSandboxOptions) {
+				if opts.RuntimeConfig != nil {
+					t.Errorf("RuntimeConfig should be nil when Runtimes is not specified, got %v", opts.RuntimeConfig)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

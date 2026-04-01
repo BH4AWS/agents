@@ -136,6 +136,16 @@ spec:
               reserveFailedSandbox:
                 description: Set ReserveFailedSandbox to true to reserve failed sandboxes
                 type: boolean
+              runtimes:
+                description: Runtimes - Runtime configuration for sandbox object
+                items:
+                  properties:
+                    name:
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
               shutdownTime:
                 description: |-
                   ShutdownTime specifies the absolute time when the sandbox should be shut down
