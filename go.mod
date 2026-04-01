@@ -4,6 +4,7 @@ go 1.24.7
 
 require (
 	connectrpc.com/connect v1.19.1
+	github.com/cncf/xds/go v0.0.0-20250501225837-2ac532fd4443
 	github.com/container-storage-interface/spec v1.9.0
 	github.com/distribution/reference v0.6.0
 	github.com/envoyproxy/envoy v1.37.1
@@ -43,7 +44,6 @@ require (
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/cncf/xds/go v0.0.0-20250501225837-2ac532fd4443 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.2.1 // indirect

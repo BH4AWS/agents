@@ -48,6 +48,16 @@ spec:
                 items:
                   type: string
                 type: array
+              runtimes:
+                description: Runtimes - Runtime configuration for sandbox object
+                items:
+                  properties:
+                    name:
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
               template:
                 description: |-
                   Template describes the pods that will be created.

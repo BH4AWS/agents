@@ -390,6 +390,11 @@ func (in *SandboxClaimSpec) DeepCopyInto(out *SandboxClaimSpec) {
 		*out = make([]CSIMountConfig, len(*in))
 		copy(*out, *in)
 	}
+	if in.Runtimes != nil {
+		in, out := &in.Runtimes, &out.Runtimes
+		*out = make([]RuntimeConfig, len(*in))
+		copy(*out, *in)
+	}
 	if in.WaitReadyTimeout != nil {
 		in, out := &in.WaitReadyTimeout, &out.WaitReadyTimeout
 		*out = new(metav1.Duration)
@@ -554,6 +559,11 @@ func (in *SandboxSetSpec) DeepCopyInto(out *SandboxSetSpec) {
 	if in.PersistentContents != nil {
 		in, out := &in.PersistentContents, &out.PersistentContents
 		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.Runtimes != nil {
+		in, out := &in.Runtimes, &out.Runtimes
+		*out = make([]RuntimeConfig, len(*in))
 		copy(*out, *in)
 	}
 	in.EmbeddedSandboxTemplate.DeepCopyInto(&out.EmbeddedSandboxTemplate)
@@ -750,6 +760,11 @@ func (in *SandboxTemplateSpec) DeepCopyInto(out *SandboxTemplateSpec) {
 	if in.PersistentContents != nil {
 		in, out := &in.PersistentContents, &out.PersistentContents
 		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.Runtimes != nil {
+		in, out := &in.Runtimes, &out.Runtimes
+		*out = make([]RuntimeConfig, len(*in))
 		copy(*out, *in)
 	}
 }
