@@ -5,8 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"golang.org/x/time/rate"
+
+	"github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 )
 
 type ClaimSandboxOptions struct {
@@ -26,6 +28,8 @@ type ClaimSandboxOptions struct {
 	ReserveFailedSandbox bool `json:"reserveFailedSandbox"`
 	// Set InplaceUpdate to non-empty string trigger an inplace-update
 	InplaceUpdate *config.InplaceUpdateOptions `json:"inplaceUpdate"`
+	// Set RuntimeConfig to non-nil value to inject runtime configuration
+	RuntimeConfig []v1alpha1.RuntimeConfig `json:"runtimeConfig"`
 	// Set InitRuntime to non-nil value to init the agent-runtime
 	InitRuntime *config.InitRuntimeOptions `json:"initRuntime"`
 	// Set CSIMount to non-nil value to mount a CSI volume

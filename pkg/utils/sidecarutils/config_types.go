@@ -5,8 +5,8 @@ import (
 )
 
 const (
-	KEY_CSI_INJECTION_CONFIG     = "csi-config"
-	KEY_RUNTIME_INJECTION_CONFIG = "agent-runtime-config"
+	KEY_CSI_INJECTION_CONFIG     = "csi"
+	KEY_RUNTIME_INJECTION_CONFIG = "agent-runtime"
 	SandboxInjectionConfigName   = "sandbox-injection-config"
 )
 

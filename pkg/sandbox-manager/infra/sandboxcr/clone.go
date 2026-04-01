@@ -226,6 +226,7 @@ func newSandboxFromTemplate(opts infra.CloneSandboxOptions, tmpl *v1alpha1.Sandb
 		},
 		Spec: v1alpha1.SandboxSpec{
 			PersistentContents: tmpl.Spec.PersistentContents,
+			Runtimes:           tmpl.Spec.Runtimes,
 			EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
 				Template:             tmpl.Spec.Template,
 				VolumeClaimTemplates: tmpl.Spec.VolumeClaimTemplates,

@@ -1,4 +1,4 @@
-/*
+  /*
 Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,15 +16,17 @@ limitations under the License.
 
 package sandboxset
 
-import (
-	"context"
-	"testing"
+  import (
+	  "context"
+	  "testing"
 
-	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/utils/expectations"
-	"github.com/stretchr/testify/assert"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-)
+	  "github.com/stretchr/testify/assert"
+	  corev1 "k8s.io/api/core/v1"
+	  metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	  agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	  "github.com/openkruise/agents/pkg/utils/expectations"
+  )
 
 func TestCalculateSandboxSetStatusFromGroup(t *testing.T) {
 	tests := []struct {
@@ -294,6 +296,223 @@ func TestCalculateSandboxSetStatusFromGroup(t *testing.T) {
 			// Additional validation
 			assert.GreaterOrEqual(t, status.Replicas, status.AvailableReplicas,
 				"replicas should be >= availableReplicas")
+		})
+	}
+}
+
+func TestNewSandboxFromSandboxSet(t *testing.T) {
+	tests := []struct {
+		name                   string
+		sandboxSet             *agentsv1alpha1.SandboxSet
+		expectedGenerateName   string
+		expectedNamespace      string
+		expectedLabels         map[string]string
+		expectedAnnotations    map[string]string
+		expectedRuntimes       []agentsv1alpha1.RuntimeConfig
+		expectedTemplateRef    *agentsv1alpha1.SandboxTemplateRef
+		expectedPersistentContents []string
+	}{
+		{
+			name: "basic sandboxset without templateRef",
+			sandboxSet: &agentsv1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sbs",
+					Namespace: "default",
+				},
+				Spec: agentsv1alpha1.SandboxSetSpec{
+					Replicas: 3,
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+						Template: &corev1.PodTemplateSpec{},
+					},
+				},
+			},
+			expectedGenerateName: "test-sbs-",
+			expectedNamespace:    "default",
+			expectedLabels: map[string]string{
+				agentsv1alpha1.LabelSandboxPool:      "test-sbs",
+				agentsv1alpha1.LabelSandboxTemplate:  "test-sbs",
+				agentsv1alpha1.LabelSandboxIsClaimed: "false",
+			},
+			expectedAnnotations:    map[string]string{},
+			expectedRuntimes:       nil,
+			expectedTemplateRef:    nil,
+			expectedPersistentContents: nil,
+		},
+		{
+			name: "sandboxset with templateRef",
+			sandboxSet: &agentsv1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sbs",
+					Namespace: "test-ns",
+				},
+				Spec: agentsv1alpha1.SandboxSetSpec{
+					Replicas: 5,
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+						Template: &corev1.PodTemplateSpec{},
+						TemplateRef: &agentsv1alpha1.SandboxTemplateRef{
+							Name: "my-template",
+						},
+					},
+				},
+			},
+			expectedGenerateName: "test-sbs-",
+			expectedNamespace:    "test-ns",
+			expectedLabels: map[string]string{
+				agentsv1alpha1.LabelSandboxPool:      "test-sbs",
+				agentsv1alpha1.LabelSandboxTemplate:  "my-template",
+				agentsv1alpha1.LabelSandboxIsClaimed: "false",
+			},
+			expectedAnnotations: map[string]string{},
+			expectedRuntimes:    nil,
+			expectedTemplateRef: &agentsv1alpha1.SandboxTemplateRef{
+				Name: "my-template",
+			},
+			expectedPersistentContents: nil,
+		},
+		{
+			name: "sandboxset with runtimes and persistentContents",
+			sandboxSet: &agentsv1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "runtime-sbs",
+					Namespace: "runtime-ns",
+				},
+				Spec: agentsv1alpha1.SandboxSetSpec{
+					Replicas:           2,
+					PersistentContents: []string{"ip", "memory"},
+					Runtimes: []agentsv1alpha1.RuntimeConfig{
+						{Name: agentsv1alpha1.RuntimeConfigForInjectCsiMount},
+						{Name: agentsv1alpha1.RuntimeConfigForInjectAgentRuntime},
+					},
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+						Template: &corev1.PodTemplateSpec{},
+					},
+				},
+			},
+			expectedGenerateName: "runtime-sbs-",
+			expectedNamespace:    "runtime-ns",
+			expectedLabels: map[string]string{
+				agentsv1alpha1.LabelSandboxPool:      "runtime-sbs",
+				agentsv1alpha1.LabelSandboxTemplate:  "runtime-sbs",
+				agentsv1alpha1.LabelSandboxIsClaimed: "false",
+			},
+			expectedAnnotations: map[string]string{},
+			expectedRuntimes: []agentsv1alpha1.RuntimeConfig{
+				{Name: agentsv1alpha1.RuntimeConfigForInjectCsiMount},
+				{Name: agentsv1alpha1.RuntimeConfigForInjectAgentRuntime},
+			},
+			expectedTemplateRef:    nil,
+			expectedPersistentContents: []string{"ip", "memory"},
+		},
+		{
+			name: "sandboxset with template labels and annotations",
+			sandboxSet: &agentsv1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "labeled-sbs",
+					Namespace: "default",
+				},
+				Spec: agentsv1alpha1.SandboxSetSpec{
+					Replicas: 1,
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+						Template: &corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Labels: map[string]string{
+									"app":  "myapp",
+									"tier": "backend",
+								},
+								Annotations: map[string]string{
+									"description": "test sandbox",
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedGenerateName: "labeled-sbs-",
+			expectedNamespace:    "default",
+			expectedLabels: map[string]string{
+				"app":                                "myapp",
+				"tier":                               "backend",
+				agentsv1alpha1.LabelSandboxPool:      "labeled-sbs",
+				agentsv1alpha1.LabelSandboxTemplate:  "labeled-sbs",
+				agentsv1alpha1.LabelSandboxIsClaimed: "false",
+			},
+			expectedAnnotations: map[string]string{
+				"description": "test sandbox",
+			},
+			expectedRuntimes:       nil,
+			expectedTemplateRef:    nil,
+			expectedPersistentContents: nil,
+		},
+		{
+			name: "sandboxset with internal prefix labels should be cleared",
+			sandboxSet: &agentsv1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "internal-sbs",
+					Namespace: "default",
+				},
+				Spec: agentsv1alpha1.SandboxSetSpec{
+					Replicas: 1,
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+						Template: &corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Labels: map[string]string{
+									"app":                                       "myapp",
+									agentsv1alpha1.InternalPrefix + "old-label": "should-be-removed",
+								},
+								Annotations: map[string]string{
+									"description":                                    "test",
+									agentsv1alpha1.InternalPrefix + "old-annotation": "should-be-removed",
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedGenerateName: "internal-sbs-",
+			expectedNamespace:    "default",
+			expectedLabels: map[string]string{
+				"app":                                "myapp",
+				agentsv1alpha1.LabelSandboxPool:      "internal-sbs",
+				agentsv1alpha1.LabelSandboxTemplate:  "internal-sbs",
+				agentsv1alpha1.LabelSandboxIsClaimed: "false",
+			},
+			expectedAnnotations: map[string]string{
+				"description": "test",
+			},
+			expectedRuntimes:       nil,
+			expectedTemplateRef:    nil,
+			expectedPersistentContents: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sandbox := NewSandboxFromSandboxSet(tt.sandboxSet)
+
+			// Verify GenerateName
+			assert.Equal(t, tt.expectedGenerateName, sandbox.GenerateName, "GenerateName mismatch")
+
+			// Verify Namespace
+			assert.Equal(t, tt.expectedNamespace, sandbox.Namespace, "Namespace mismatch")
+
+			// Verify Labels
+			assert.Equal(t, tt.expectedLabels, sandbox.Labels, "Labels mismatch")
+
+			// Verify Annotations
+			assert.Equal(t, tt.expectedAnnotations, sandbox.Annotations, "Annotations mismatch")
+
+			// Verify Runtimes
+			assert.Equal(t, tt.expectedRuntimes, sandbox.Spec.Runtimes, "Runtimes mismatch")
+
+			// Verify TemplateRef
+			assert.Equal(t, tt.expectedTemplateRef, sandbox.Spec.TemplateRef, "TemplateRef mismatch")
+
+			// Verify PersistentContents
+			assert.Equal(t, tt.expectedPersistentContents, sandbox.Spec.PersistentContents, "PersistentContents mismatch")
+
+			// Verify internal labels are set correctly
+			assert.Equal(t, "false", sandbox.Labels[agentsv1alpha1.LabelSandboxIsClaimed], "LabelSandboxIsClaimed should be false")
+			assert.Equal(t, tt.sandboxSet.Name, sandbox.Labels[agentsv1alpha1.LabelSandboxPool], "LabelSandboxPool should match SandboxSet name")
 		})
 	}
 }

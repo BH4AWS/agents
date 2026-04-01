@@ -319,6 +319,10 @@ func (c *commonControl) buildClaimOptions(ctx context.Context, claim *agentsv1al
 		}
 	}
 
+	if len(claim.Spec.Runtimes) > 0 {
+		opts.RuntimeConfig = claim.Spec.Runtimes
+	}
+
 	// Validate and initialize
 	return sandboxcr.ValidateAndInitClaimOptions(opts)
 }

@@ -443,6 +443,9 @@ func CreateCheckpointAndTemplate(t *testing.T, controller *Controller, checkpoin
 	}
 	_, err = client.ApiV1alpha1().Checkpoints(Namespace).Create(t.Context(), cp, metav1.CreateOptions{})
 	require.NoError(t, err)
+	// UpdateStatus is required because Kubernetes API ignores Status field during Create
+	_, err = client.ApiV1alpha1().Checkpoints(Namespace).UpdateStatus(t.Context(), cp, metav1.UpdateOptions{})
+	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		return controller.manager.GetInfra().HasCheckpoint(checkpointID)
 	}, time.Second, 10*time.Millisecond)

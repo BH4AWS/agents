@@ -66,6 +66,16 @@ spec:
                   available and creating ones.
                 format: int32
                 type: integer
+              runtimes:
+                description: Runtimes - Runtime configuration for sandbox object
+                items:
+                  properties:
+                    name:
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
               scaleStrategy:
                 description: |-
                   ScaleStrategy indicates the ScaleStrategy that will be employed to

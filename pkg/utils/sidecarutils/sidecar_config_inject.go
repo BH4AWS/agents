@@ -17,11 +17,21 @@ import (
 )
 
 func enableInjectCsiMountConfig(sandbox *agentsv1alpha1.Sandbox) bool {
-	return sandbox.Annotations[agentsv1alpha1.ShouldInjectCsiMount] == "true"
+	for _, runtime := range sandbox.Spec.Runtimes {
+		if runtime.Name == agentsv1alpha1.RuntimeConfigForInjectCsiMount {
+			return true
+		}
+	}
+	return false
 }
 
 func enableInjectAgentRuntimeConfig(sandbox *agentsv1alpha1.Sandbox) bool {
-	return sandbox.Annotations[agentsv1alpha1.ShouldInjectAgentRuntime] == "true"
+	for _, runtime := range sandbox.Spec.Runtimes {
+		if runtime.Name == agentsv1alpha1.RuntimeConfigForInjectAgentRuntime {
+			return true
+		}
+	}
+	return false
 }
 
 func fetchInjectionConfiguration(ctx context.Context, cli client.Client) (map[string]string, error) {
@@ -150,23 +160,29 @@ func setAgentRuntimeContainer(ctx context.Context, podSpec *corev1.PodSpec, conf
 func setMainContainerConfigWhenInjectRuntimeSidecar(ctx context.Context, mainContainer *corev1.Container, config SidecarInjectConfig) {
 	log := logf.FromContext(ctx)
 
-	// Check if main container already has a postStart hook
-	if mainContainer.Lifecycle != nil && mainContainer.Lifecycle.PostStart != nil {
-		if config.MainContainer.Lifecycle != nil && config.MainContainer.Lifecycle.PostStart != nil {
-			log.Error(nil, "conflicting postStart hooks detected, main container already has a postStart hook defined",
+	// Check if main container already has a valid postStart hook (with actual handler)
+	mainContainerHasValidPostStart := mainContainer.Lifecycle != nil &&
+		mainContainer.Lifecycle.PostStart != nil &&
+		hasValidLifecycleHandler(mainContainer.Lifecycle.PostStart)
+
+	configHasValidPostStart := config.MainContainer.Lifecycle != nil &&
+		config.MainContainer.Lifecycle.PostStart != nil &&
+		hasValidLifecycleHandler(config.MainContainer.Lifecycle.PostStart)
+
+	if mainContainerHasValidPostStart {
+		if configHasValidPostStart {
+			log.V(consts.DebugLogLevel).Info("conflicting postStart hooks detected, main container already has a postStart hook defined",
 				"existingHook", mainContainer.Lifecycle.PostStart,
 				"injectedHook", config.MainContainer.Lifecycle.PostStart)
+			return
 		}
 	} else {
-		// set main container lifecycle
-		if mainContainer.Lifecycle == nil {
-			mainContainer.Lifecycle = &corev1.Lifecycle{}
-		}
-		if mainContainer.Lifecycle.PostStart == nil {
-			mainContainer.Lifecycle.PostStart = &corev1.LifecycleHandler{}
-		}
-		// Main container doesn't have postStart, apply config if available
-		if config.MainContainer.Lifecycle != nil && config.MainContainer.Lifecycle.PostStart != nil {
+		// Main container doesn't have valid postStart, apply config if available
+		if configHasValidPostStart {
+			// set main container lifecycle
+			if mainContainer.Lifecycle == nil {
+				mainContainer.Lifecycle = &corev1.Lifecycle{}
+			}
 			mainContainer.Lifecycle.PostStart = config.MainContainer.Lifecycle.PostStart
 		}
 	}
@@ -226,4 +242,14 @@ func isContainersExists(podContainers []corev1.Container, injectContainers []cor
 		}
 	}
 	return false
+}
+
+// hasValidLifecycleHandler checks if the lifecycle handler has at least one valid action defined.
+// A valid handler must have at least one of: Exec, HTTPGet, or TCPSocket.
+// Returns false if the handler is nil or all actions are nil (empty handler).
+func hasValidLifecycleHandler(handler *corev1.LifecycleHandler) bool {
+	if handler == nil {
+		return false
+	}
+	return handler.Exec != nil || handler.HTTPGet != nil || handler.TCPSocket != nil
 }

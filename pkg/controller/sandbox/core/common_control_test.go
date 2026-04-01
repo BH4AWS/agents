@@ -1305,11 +1305,13 @@ func TestCommonControl_createPod_WithSidecarInjection(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-sandbox",
 					Namespace: "default",
-					Annotations: map[string]string{
-						agentsv1alpha1.ShouldInjectAgentRuntime: "true",
-					},
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
+					Runtimes: []agentsv1alpha1.RuntimeConfig{
+						{
+							Name: agentsv1alpha1.RuntimeConfigForInjectAgentRuntime,
+						},
+					},
 					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
@@ -1359,11 +1361,13 @@ func TestCommonControl_createPod_WithSidecarInjection(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-sandbox",
 					Namespace: "default",
-					Annotations: map[string]string{
-						agentsv1alpha1.ShouldInjectCsiMount: "true",
-					},
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
+					Runtimes: []agentsv1alpha1.RuntimeConfig{
+						{
+							Name: agentsv1alpha1.RuntimeConfigForInjectCsiMount,
+						},
+					},
 					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
@@ -1416,12 +1420,16 @@ func TestCommonControl_createPod_WithSidecarInjection(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-sandbox",
 					Namespace: "default",
-					Annotations: map[string]string{
-						agentsv1alpha1.ShouldInjectAgentRuntime: "true",
-						agentsv1alpha1.ShouldInjectCsiMount:     "true",
-					},
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
+					Runtimes: []agentsv1alpha1.RuntimeConfig{
+						{
+							Name: agentsv1alpha1.RuntimeConfigForInjectAgentRuntime,
+						},
+						{
+							Name: agentsv1alpha1.RuntimeConfigForInjectCsiMount,
+						},
+					},
 					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
