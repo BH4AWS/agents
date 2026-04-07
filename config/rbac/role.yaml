@@ -55,6 +55,15 @@ rules:
 - apiGroups:
   - agents.kruise.io
   resources:
+  - checkpoints
+  - sandboxtemplates
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - agents.kruise.io
+  resources:
   - sandboxclaims
   verbs:
   - delete

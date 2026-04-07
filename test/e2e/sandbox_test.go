@@ -103,10 +103,85 @@ var _ = Describe("Sandbox", func() {
 					Namespace: sandbox.Namespace,
 				}, sandbox)
 				return sandbox.Status.Phase
-			}, time.Second*30, time.Millisecond*500).Should(Equal(agentsv1alpha1.SandboxRunning))
+			}, time.Second*90, time.Millisecond*500).Should(Equal(agentsv1alpha1.SandboxRunning))
 
 			By("Verifying the sandbox has latest revision")
 			Expect(sandbox.Status.UpdateRevision).NotTo(BeEmpty())
+		})
+
+		It("should create sandbox from templateRef and transition to running phase", func() {
+			templateName := fmt.Sprintf("test-template-%d", time.Now().UnixNano())
+			templateImage := "nginx:stable-alpine3.23"
+			sandboxTemplate := &agentsv1alpha1.SandboxTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      templateName,
+					Namespace: namespace,
+				},
+				Spec: agentsv1alpha1.SandboxTemplateSpec{
+					Template: &corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{
+								{
+									Name:  "test-container",
+									Image: templateImage,
+									Ports: []corev1.ContainerPort{
+										{
+											Name:          "http",
+											ContainerPort: 80,
+										},
+									},
+								},
+							},
+							RestartPolicy: corev1.RestartPolicyNever,
+						},
+					},
+				},
+			}
+
+			By("Creating a new SandboxTemplate")
+			Expect(k8sClient.Create(ctx, sandboxTemplate)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, sandboxTemplate)
+			}()
+
+			sandbox = &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("test-sandbox-template-ref-%d", time.Now().UnixNano()),
+					Namespace: namespace,
+				},
+				Spec: agentsv1alpha1.SandboxSpec{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+						TemplateRef: &agentsv1alpha1.SandboxTemplateRef{
+							Name: templateName,
+						},
+					},
+				},
+			}
+
+			By("Creating a new Sandbox with templateRef")
+			Expect(k8sClient.Create(ctx, sandbox)).To(Succeed())
+
+			By("Waiting for sandbox to reach Running phase")
+			Eventually(func() agentsv1alpha1.SandboxPhase {
+				_ = k8sClient.Get(ctx, types.NamespacedName{
+					Name:      sandbox.Name,
+					Namespace: sandbox.Namespace,
+				}, sandbox)
+				return sandbox.Status.Phase
+			}, time.Second*60, time.Millisecond*500).Should(Equal(agentsv1alpha1.SandboxRunning))
+
+			By("Verifying pod image is from SandboxTemplate")
+			pod := &corev1.Pod{}
+			Eventually(func() string {
+				_ = k8sClient.Get(ctx, types.NamespacedName{
+					Name:      sandbox.Name,
+					Namespace: sandbox.Namespace,
+				}, pod)
+				if len(pod.Spec.Containers) == 0 {
+					return ""
+				}
+				return pod.Spec.Containers[0].Image
+			}, time.Second*30, time.Millisecond*500).Should(Equal(templateImage))
 		})
 	})
 

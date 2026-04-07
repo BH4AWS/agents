@@ -2,6 +2,8 @@ package sandboxcr
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +22,7 @@ import (
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/utils"
+	"github.com/openkruise/agents/pkg/utils/sandbox-manager/proxyutils"
 )
 
 func ConvertPodToSandboxCR(pod *corev1.Pod) *v1alpha1.Sandbox {
@@ -351,6 +354,91 @@ func TestSandbox_GetTimeout(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestSandbox_SetImageAndGetImage(t *testing.T) {
+	t.Run("set and get image with template", func(t *testing.T) {
+		s := &Sandbox{
+			Sandbox: &v1alpha1.Sandbox{
+				Spec: v1alpha1.SandboxSpec{
+					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
+						Template: &corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{
+										Name:  "app",
+										Image: "nginx:old",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		s.SetImage("nginx:new")
+		assert.Equal(t, "nginx:new", s.GetImage())
+	})
+
+	t.Run("set and get image with nil template", func(t *testing.T) {
+		s := &Sandbox{
+			Sandbox: &v1alpha1.Sandbox{
+				Spec: v1alpha1.SandboxSpec{
+					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
+						Template: nil,
+					},
+				},
+			},
+		}
+
+		assert.NotPanics(t, func() {
+			s.SetImage("nginx:new")
+		})
+		assert.Equal(t, "", s.GetImage())
+	})
+}
+
+func TestSandbox_GetSandboxID(t *testing.T) {
+	s := &Sandbox{
+		Sandbox: &v1alpha1.Sandbox{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "default",
+				Name:      "test-sandbox",
+			},
+		},
+	}
+
+	assert.Equal(t, "default--test-sandbox", s.GetSandboxID())
+}
+
+func TestSandbox_Request(t *testing.T) {
+	orig := proxyutils.DefaultRequestFunc
+	t.Cleanup(func() {
+		proxyutils.DefaultRequestFunc = orig
+	})
+
+	proxyutils.DefaultRequestFunc = func(ctx context.Context, sbx *v1alpha1.Sandbox, method, path string, port int, body io.Reader) (*http.Response, error) {
+		assert.Equal(t, "GET", method)
+		assert.Equal(t, "/healthz", path)
+		assert.Equal(t, 8080, port)
+		assert.Equal(t, "default", sbx.Namespace)
+		assert.Equal(t, "test-sandbox", sbx.Name)
+		return &http.Response{StatusCode: http.StatusOK}, nil
+	}
+
+	s := &Sandbox{
+		Sandbox: &v1alpha1.Sandbox{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "default",
+				Name:      "test-sandbox",
+			},
+		},
+	}
+	resp, err := s.Request(context.Background(), "GET", "/healthz", 8080, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
 func TestSandbox_SaveTimeout(t *testing.T) {

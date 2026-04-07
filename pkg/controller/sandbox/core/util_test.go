@@ -191,6 +191,19 @@ func TestHashSandbox(t *testing.T) {
 			},
 			validateDifferentHashes: true,
 		},
+		{
+			name: "sandbox with templateRef only",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Spec: agentsv1alpha1.SandboxSpec{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+						TemplateRef: &agentsv1alpha1.SandboxTemplateRef{
+							Name: "template-a",
+						},
+					},
+				},
+			},
+			validateDifferentHashes: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -230,6 +243,25 @@ func TestHashSandbox(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHashSandboxWithNilTemplateAndNilTemplateRef(t *testing.T) {
+	sandbox := &agentsv1alpha1.Sandbox{
+		Spec: agentsv1alpha1.SandboxSpec{
+			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+				Template:    nil,
+				TemplateRef: nil,
+			},
+		},
+	}
+
+	hash, hashWithoutImageResources := HashSandbox(sandbox)
+	if hash != "" {
+		t.Fatalf("expected empty hash, got %q", hash)
+	}
+	if hashWithoutImageResources != "" {
+		t.Fatalf("expected empty hashWithoutImageResources, got %q", hashWithoutImageResources)
 	}
 }
 

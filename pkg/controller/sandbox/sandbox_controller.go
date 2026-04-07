@@ -84,6 +84,8 @@ type SandboxReconciler struct {
 }
 
 // +kubebuilder:rbac:groups=agents.kruise.io,resources=sandboxes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=agents.kruise.io,resources=sandboxtemplates,verbs=get;list;watch
+// +kubebuilder:rbac:groups=agents.kruise.io,resources=checkpoints,verbs=get;list;watch
 // +kubebuilder:rbac:groups=agents.kruise.io,resources=sandboxes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agents.kruise.io,resources=sandboxes/finalizers,verbs=update
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
@@ -120,7 +122,7 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 	// Record sandbox lifecycle metrics on every reconcile
 	recordSandboxMetrics(box)
 
-	if box.Spec.Template == nil {
+	if box.Spec.Template == nil && box.Spec.TemplateRef == nil {
 		if !box.DeletionTimestamp.IsZero() {
 			newStatus := box.Status.DeepCopy()
 			args := core.EnsureFuncArgs{Pod: pod, Box: box, NewStatus: newStatus}

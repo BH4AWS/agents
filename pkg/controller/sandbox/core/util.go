@@ -34,6 +34,17 @@ import (
 
 // HashSandbox calculates the hash value using sandbox.spec.template
 func HashSandbox(box *agentsv1alpha1.Sandbox) (string, string) {
+	if box.Spec.Template == nil {
+		if box.Spec.TemplateRef == nil {
+			return "", ""
+		}
+		// templateRef mode does not carry inline PodTemplate in Sandbox spec.
+		// Use TemplateRef itself as a stable revision key to avoid nil dereference.
+		by, _ := json.Marshal(box.Spec.TemplateRef)
+		hash := utils.HashData(by)
+		return hash, hash
+	}
+
 	// hash using sandbox.spec.template
 	by, _ := json.Marshal(*box.Spec.Template)
 	hash := utils.HashData(by)
