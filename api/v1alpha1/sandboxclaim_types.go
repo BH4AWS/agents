@@ -50,8 +50,9 @@ type SandboxClaimSpec struct {
 	// TTLAfterCompleted specifies the time to live after the claim reaches Completed phase
 	// After this duration, the SandboxClaim will be automatically deleted.
 	// Note: Only the SandboxClaim resource will be deleted; the claimed sandboxes will NOT be deleted
+	// Set to a negative value (e.g., "-1s") to disable automatic deletion (never delete).
 	// +optional
-	// +kubebuilder:default="5m"
+	// +kubebuilder:default="60m"
 	TTLAfterCompleted *metav1.Duration `json:"ttlAfterCompleted,omitempty"`
 
 	// Labels contains key-value pairs to be added as labels
