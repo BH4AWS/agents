@@ -37,6 +37,8 @@ import (
 	"github.com/openkruise/agents/pkg/utils"
 	csimountutils "github.com/openkruise/agents/pkg/utils/csiutils"
 	"github.com/openkruise/agents/pkg/utils/expectations"
+
+	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	sandboxManagerUtils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
 	"github.com/openkruise/agents/pkg/utils/sandbox-manager/proxyutils"
 	stateutils "github.com/openkruise/agents/pkg/utils/sandboxutils"
@@ -313,18 +315,14 @@ func (s *Sandbox) Resume(ctx context.Context) error {
 		log.Info("will re-mount csi storage after resume")
 		startTime := time.Now()
 		csiClient := csimountutils.NewCSIMountHandler(s.Client, s.Cache, s.storageRegistry, utils.DefaultSandboxDeployNamespace)
-		for _, mountConfigRequest := range csiMountConfigRequests {
-			driverName, csiReqConfigRaw, genErr := csiClient.CSIMountOptionsConfig(ctx, mountConfigRequest)
-			if genErr != nil {
-				errMsg := "failed to generate csi mount options config for sandbox"
-				log.Error(genErr, errMsg, "mountConfigRequest", mountConfigRequest)
-				return fmt.Errorf("%s, err: %v", errMsg, genErr)
-			}
-			mountErr := s.CSIMount(ctx, driverName, csiReqConfigRaw)
-			if mountErr != nil {
-				log.Error(mountErr, "failed to remount csi storage after resume", "driverName", driverName, "mountConfigRequest", mountConfigRequest)
-				return fmt.Errorf("failed to remount csi storage after resume: %v", mountErr)
-			}
+		mountConfigs, resolveErr := resolveCSIMountConfigs(ctx, csiClient, csiMountConfigRequests)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		opts := config.CSIMountOptions{MountOptionList: mountConfigs}
+		if _, mountErr := processCSIMounts(ctx, s, opts); mountErr != nil {
+			log.Error(mountErr, "failed to remount csi storage after resume")
+			return fmt.Errorf("failed to remount csi storage after resume: %v", mountErr)
 		}
 		log.Info("remount csi storage completed after resume", "costTime", time.Since(startTime))
 	}
@@ -387,6 +385,22 @@ func (s *Sandbox) CreateCheckpoint(ctx context.Context, opts infra.CreateCheckpo
 }
 
 var _ infra.Sandbox = &Sandbox{}
+
+// resolveCSIMountConfigs converts CSIMountConfig requests into MountConfig
+// by calling CSIMountOptionsConfig for each request sequentially.
+func resolveCSIMountConfigs(ctx context.Context, csiClient *csimountutils.CSIMountHandler, requests []agentsv1alpha1.CSIMountConfig) ([]config.MountConfig, error) {
+	log := klog.FromContext(ctx)
+	results := make([]config.MountConfig, 0, len(requests))
+	for _, req := range requests {
+		driverName, csiReqConfigRaw, err := csiClient.CSIMountOptionsConfig(ctx, req)
+		if err != nil {
+			log.Error(err, "failed to generate csi mount options config", "mountConfigRequest", req)
+			return nil, fmt.Errorf("failed to generate csi mount options config, err: %v", err)
+		}
+		results = append(results, config.MountConfig{Driver: driverName, RequestRaw: csiReqConfigRaw})
+	}
+	return results, nil
+}
 
 func AsSandbox(sbx *agentsv1alpha1.Sandbox, cache *Cache, client *clients.ClientSet) *Sandbox {
 	return &Sandbox{

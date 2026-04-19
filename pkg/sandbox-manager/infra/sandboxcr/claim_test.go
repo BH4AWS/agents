@@ -217,6 +217,7 @@ func TestInfra_ClaimSandbox(t *testing.T) {
 			options: infra.ClaimSandboxOptions{
 				User:        user,
 				Template:    existTemplate,
+				ClaimTimeout: 500 * time.Millisecond,
 				InitRuntime: &config.InitRuntimeOptions{},
 				CSIMount: &config.CSIMountOptions{
 					MountOptionList: []config.MountConfig{
@@ -361,7 +362,9 @@ func TestInfra_ClaimSandbox(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.options.ClaimTimeout = 50 * time.Millisecond
+			if tt.options.ClaimTimeout <= 0 {
+				tt.options.ClaimTimeout = 50 * time.Millisecond
+			}
 			testInfra, client := NewTestInfra(t, tt.infraOptions)
 			now := metav1.Now()
 			for i := 0; i < tt.available; i++ {

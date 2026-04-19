@@ -222,27 +222,49 @@ func csiMount(ctx context.Context, sbx *Sandbox, opts config.MountConfig) (time.
 	return time.Since(start), err
 }
 
-// processCSIMounts performs CSI volume mounting operations for all mount configurations.
-// It iterates through each mount option in the list and attempts to mount them sequentially.
-// If a mount operation fails, it logs the error and continues with the next mount option
-// to ensure that a single failure doesn't block other mounts.
-// Returns the total duration spent on all mount operations and any accumulated errors.
+// processCSIMounts performs CSI volume mounting operations for all mount configurations concurrently.
+// It uses opts.Concurrency to limit the number of concurrent mount goroutines.
+// If Concurrency is 0 or negative, it defaults to config.DefaultCSIMountConcurrency.
+// Returns the total duration spent on all mount operations and the first encountered error.
 func processCSIMounts(ctx context.Context, sbx *Sandbox, opts config.CSIMountOptions) (time.Duration, error) {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbx))
 	start := time.Now()
 
-	for _, opt := range opts.MountOptionList {
-		mountDuration, err := csiMount(ctx, sbx, opt)
-		if err != nil {
-			log.Error(err, "failed to perform CSI mount", "mountOptionConfig", opt)
-			return time.Since(start), err
-		}
-		log.Info("CSI mount completed successfully",
-			"mountOptionConfig", opt,
-			"duration", mountDuration)
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(opts.MountOptionList))
+
+	// Use a semaphore channel to limit concurrency
+	concurrency := opts.Concurrency
+	if concurrency <= 0 {
+		concurrency = config.DefaultCSIMountConcurrency
 	}
-	totalDuration := time.Since(start)
-	return totalDuration, nil
+	sem := make(chan struct{}, concurrency)
+
+	for _, opt := range opts.MountOptionList {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(opt config.MountConfig) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			mountDuration, err := csiMount(ctx, sbx, opt)
+			if err != nil {
+				log.Error(err, "failed to perform CSI mount", "mountOptionConfig", opt)
+				errCh <- err
+				return
+			}
+			log.Info("CSI mount completed successfully",
+				"mountOptionConfig", opt,
+				"duration", mountDuration)
+		}(opt)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	if err := <-errCh; err != nil {
+		return time.Since(start), err
+	}
+	return time.Since(start), nil
 }
 
 func getPickKey(sbx *v1alpha1.Sandbox) string {

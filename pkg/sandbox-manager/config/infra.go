@@ -6,9 +6,12 @@ type InitRuntimeOptions struct {
 	ReInit      bool              `json:"-"`
 }
 
+const DefaultCSIMountConcurrency = 3
+
 type CSIMountOptions struct {
 	MountOptionList    []MountConfig `json:"mountOptionList"`
-	MountOptionListRaw string        `json:"mountOptionListRaw"` // the raw json string for mount options
+	MountOptionListRaw string        `json:"mountOptionListRaw"`    // the raw json string for mount options
+	Concurrency        int           `json:"concurrency,omitempty"` // max concurrent CSI mount operations, 0 or negative means unlimited, default is DefaultCSIMountConcurrency
 }
 
 type MountConfig struct {
