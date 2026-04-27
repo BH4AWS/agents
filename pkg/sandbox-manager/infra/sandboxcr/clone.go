@@ -165,7 +165,7 @@ func createSandboxFromCheckpoint(ctx context.Context, opts infra.CloneSandboxOpt
 	}
 	sbx := newSandboxFromTemplate(opts, tmpl, cache, client)
 	if initRuntimeOpts != nil {
-		sbx.Annotations[v1alpha1.AnnotationRuntimeAccessToken] = initRuntimeOpts.AccessToken
+		sbx.Annotations[v1alpha1.AnnotationRuntimeAccessToken] = initRuntimeOpts.AccessToken.GetAccessToken()
 		sbx.Annotations[v1alpha1.AnnotationInitRuntimeRequest] = cp.Annotations[v1alpha1.AnnotationInitRuntimeRequest]
 	}
 	DefaultPostProcessClonedSandbox(sbx.Sandbox)

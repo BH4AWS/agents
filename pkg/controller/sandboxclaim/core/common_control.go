@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"golang.org/x/time/rate"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
@@ -320,8 +319,11 @@ func (c *commonControl) buildClaimOptions(ctx context.Context, claim *agentsv1al
 
 	if !claim.Spec.SkipInitRuntime {
 		opts.InitRuntime = &config.InitRuntimeOptions{
-			EnvVars:     claim.Spec.EnvVars,
-			AccessToken: uuid.NewString(),
+			EnvVars: claim.Spec.EnvVars,
+			AccessToken: &config.AccessTokenOptions{
+				AccessToken:     config.NewDefaultAccessToken(),
+				AccessTokenType: config.AccessTokenTypeUUID,
+			},
 		}
 	}
 	if len(claim.Spec.DynamicVolumesMount) > 0 {

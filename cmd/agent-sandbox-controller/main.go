@@ -46,6 +46,7 @@ import (
 	"github.com/openkruise/agents/client"
 	"github.com/openkruise/agents/pkg/controller"
 	"github.com/openkruise/agents/pkg/features"
+	"github.com/openkruise/agents/pkg/identityprovider"
 	"github.com/openkruise/agents/pkg/utils"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
 	"github.com/openkruise/agents/pkg/utils/fieldindex"
@@ -267,6 +268,10 @@ func main() {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
+
+	// Initialize the identity provider based on SecurityIdentityProviderGate feature gate.
+	// Must be called after pflag.Parse() and before controllers start reconciling.
+	identityprovider.InitProvider()
 
 	setupLog.Info("setup controllers")
 	if err = controller.SetupWithManager(mgr); err != nil {

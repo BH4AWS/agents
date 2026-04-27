@@ -84,6 +84,7 @@ func NewController(domain string, sysNs, sandboxNamespace, sandboxLabelSelector 
 		}
 		sc.keys = storage
 	}
+
 	return sc
 }
 

@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openkruise/agents/pkg/utils/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
@@ -15,6 +14,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+
+	"github.com/openkruise/agents/pkg/utils/runtime"
 
 	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
@@ -256,7 +257,9 @@ func TestCloneSandbox(t *testing.T) {
 				WaitReadyTimeout: 30 * time.Second,
 			},
 			initRuntime: &config.InitRuntimeOptions{
-				AccessToken: "test-access-token",
+				AccessToken: &config.AccessTokenOptions{
+					AccessToken: "test-access-token",
+				},
 				EnvVars: map[string]string{
 					"VAR1": "value1",
 					"VAR2": "value2",
@@ -287,7 +290,9 @@ func TestCloneSandbox(t *testing.T) {
 				WaitReadyTimeout: 30 * time.Second,
 			},
 			initRuntime: &config.InitRuntimeOptions{
-				AccessToken: "test-access-token",
+				AccessToken: &config.AccessTokenOptions{
+					AccessToken: "test-access-token",
+				},
 				EnvVars: map[string]string{
 					"VAR1": "value1",
 				},
@@ -317,7 +322,9 @@ func TestCloneSandbox(t *testing.T) {
 				WaitReadyTimeout: 30 * time.Second,
 			},
 			initRuntime: &config.InitRuntimeOptions{
-				AccessToken: "test-access-token",
+				AccessToken: &config.AccessTokenOptions{
+					AccessToken: "test-access-token",
+				},
 				EnvVars: map[string]string{
 					"VAR1": "value1",
 				},

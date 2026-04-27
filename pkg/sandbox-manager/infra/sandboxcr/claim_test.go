@@ -2148,7 +2148,9 @@ func TestModifyPickedSandbox_InitRuntime(t *testing.T) {
 						"ENV1": "value1",
 						"ENV2": "value2",
 					},
-					AccessToken: "test-token",
+					AccessToken: &config.AccessTokenOptions{
+						AccessToken: "test-token",
+					},
 				},
 			},
 			expectedAnnos: map[string]string{

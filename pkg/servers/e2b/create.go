@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/klog/v2"
 
@@ -55,9 +54,12 @@ func (sc *Controller) CreateSandbox(r *http.Request) (web.ApiResponse[*models.Sa
 func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models.NewSandboxRequest, user *models.CreatedTeamAPIKey) (web.ApiResponse[*models.Sandbox], *web.ApiError) {
 	log := klog.FromContext(ctx)
 	claimStart := time.Now()
-	var accessToken string
+	var accessToken *config.AccessTokenOptions
 	if request.Secure {
-		accessToken = uuid.NewString()
+		accessToken = &config.AccessTokenOptions{
+			AccessToken:     config.NewDefaultAccessToken(),
+			AccessTokenType: config.AccessTokenTypeUUID,
+		}
 	}
 	opts := infra.ClaimSandboxOptions{
 		Template:     request.TemplateID,
@@ -133,7 +135,7 @@ func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models
 		"resourceVersion", sbx.GetResourceVersion(), "totalCost", time.Since(claimStart))
 	return web.ApiResponse[*models.Sandbox]{
 		Code: http.StatusCreated,
-		Body: sc.convertToE2BSandbox(sbx, accessToken),
+		Body: sc.convertToE2BSandbox(sbx, accessToken.GetAccessToken()),
 	}, nil
 }
 

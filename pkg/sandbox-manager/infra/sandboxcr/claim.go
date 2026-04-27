@@ -9,11 +9,11 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/openkruise/agents/pkg/utils/runtime"
 	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -23,6 +23,11 @@ import (
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/openkruise/agents/pkg/features"
+	"github.com/openkruise/agents/pkg/identityprovider"
+	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
+	"github.com/openkruise/agents/pkg/utils/runtime"
 
 	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/controller/sandboxset"
@@ -38,6 +43,48 @@ import (
 	"github.com/openkruise/agents/pkg/utils/sandbox-manager/proxyutils"
 	stateutils "github.com/openkruise/agents/pkg/utils/sandboxutils"
 )
+
+// PostClaimHook is a function that performs post-processing after a sandbox has been
+// successfully claimed. It is called only when a security token has been issued.
+//
+// Parameters:
+//   - ctx: The claim context, carries logging and cancellation.
+//   - sbx: The claimed sandbox instance (supports Request, RunCommand, etc.).
+//   - securityToken: The issued security token to be injected into the runtime.
+//
+// Community default: No hooks registered — this block is a no-op.
+// Internal deployment: Register hooks via RegisterPostClaimHook() to inject tokens
+// into the sandbox runtime (e.g., write credential files via RunCommand).
+type PostClaimHook func(ctx context.Context, sbx infra.Sandbox, securityToken *config.SecurityTokenOptions) error
+
+var postClaimHooks []PostClaimHook
+
+// RegisterPostClaimHook appends a hook to be executed after sandbox claim succeeds
+// and a security token has been issued. Hooks are called sequentially in registration order.
+// Errors from hooks are logged but do not fail the overall claim operation.
+func RegisterPostClaimHook(hook PostClaimHook) {
+	postClaimHooks = append(postClaimHooks, hook)
+	klog.Infof("post-claim hook registered, total hooks: %d", len(postClaimHooks))
+}
+
+// runPostClaimHooks executes all registered post-claim hooks sequentially.
+// Returns the first encountered error, but continues executing remaining hooks.
+func runPostClaimHooks(ctx context.Context, sbx infra.Sandbox, securityToken *config.SecurityTokenOptions) error {
+	if len(postClaimHooks) == 0 {
+		return nil
+	}
+	log := klog.FromContext(ctx)
+	var firstErr error
+	for i, hook := range postClaimHooks {
+		if hookErr := hook(ctx, sbx, securityToken); hookErr != nil {
+			log.Error(hookErr, "post-claim hook failed", "hookIndex", i)
+			if firstErr == nil {
+				firstErr = hookErr
+			}
+		}
+	}
+	return firstErr
+}
 
 func ValidateAndInitClaimOptions(opts infra.ClaimSandboxOptions) (infra.ClaimSandboxOptions, error) {
 	if opts.User == "" {
@@ -140,6 +187,28 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 	}()
 	log.Info("sandbox picked", "sandbox", klog.KObj(sbx.Sandbox), "lockType", lockType)
 
+	// Step 1.5: When SecurityIdentityProvider feature gate is enabled and the current token type is UUID,
+	// attempt to upgrade the access token by issuing a security token via the identity provider.
+	// On failure, the original UUID token is preserved (fallback behavior).
+	if opts.InitRuntime != nil && opts.InitRuntime.AccessToken != nil && opts.InitRuntime.AccessToken.AccessTokenType == config.AccessTokenTypeUUID &&
+		utilfeature.DefaultFeatureGate.Enabled(features.SecurityIdentityProviderGate) {
+		opts.SecurityToken = &config.SecurityTokenOptions{}
+		log.Info("starting to issue security token via identity provider")
+		metrics.SecurityToken, err = issueSecurityToken(ctx, sbx, opts.SecurityToken)
+		if err == nil {
+			metrics.Total += metrics.SecurityToken
+			log.Info("security token issued, upgrading access token to identity_provider type",
+				"costTime", metrics.SecurityToken, "tokenLength", len(opts.SecurityToken.AccessToken))
+			opts.InitRuntime.AccessToken = &config.AccessTokenOptions{
+				AccessTokenType: config.AccessTokenTypeIdentityProvider,
+				AccessToken:     opts.SecurityToken.AccessToken,
+			}
+		} else {
+			log.Error(err, "failed to issue security token, keeping original UUID token as fallback")
+			err = nil // clear error to avoid affecting downstream flow
+		}
+	}
+
 	// Step 2: Modify and lock sandbox. All modifications to be applied to the Sandbox should be performed here.
 	if err = modifyPickedSandbox(sbx, lockType, opts); err != nil {
 		log.Error(err, "failed to modify picked sandbox")
@@ -204,6 +273,18 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 		}
 		metrics.Total += metrics.CSIMount
 		log.Info("csi mount completed", "cost", metrics.CSIMount)
+	}
+
+	if opts.SecurityToken != nil && opts.SecurityToken.AccessToken != "" &&
+		utilfeature.DefaultFeatureGate.Enabled(features.SecurityIdentityProviderGate) {
+		log.Info("executing post-claim hooks", "hookCount", len(postClaimHooks))
+		startTime := time.Now()
+		if err = runPostClaimHooks(ctx, sbx, opts.SecurityToken); err != nil {
+			log.Error(err, "post-claim hook encountered errors, continuing claim flow")
+			err = retriableError{Message: fmt.Sprintf("post-claim hook encountered errors: %s", err)}
+			return
+		}
+		log.Info("post-claim hooks completed", "cost", time.Since(startTime))
 	}
 
 	return
@@ -438,6 +519,43 @@ func pickFromCandidates(ctx context.Context, candidates []*v1alpha1.Sandbox, pic
 	return nil, errors.New("all candidates are picked")
 }
 
+// issueSecurityToken issues a security token for the given sandbox using identityprovider.DefaultProvider.
+// The issued access token is written into the sandbox's SecurityToken option for downstream consumption.
+func issueSecurityToken(ctx context.Context, sbx *Sandbox, opts *config.SecurityTokenOptions) (time.Duration, error) {
+	ctx = logs.Extend(ctx, "action", "issueSecurityToken")
+	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbx.Sandbox))
+	start := time.Now()
+
+	sbxLabels := sbx.GetLabels()
+	metadata := make(map[string]string)
+	for k, v := range sbxLabels {
+		if strings.HasPrefix(k, "security.") {
+			metadata[k] = v
+		}
+	}
+
+	tokenResp, err := identityprovider.DefaultProvider.IssueToken(ctx, identityprovider.TokenRequest{
+		TokenType: identityprovider.TokenTypeAgent,
+		Sandbox: &identityprovider.SandboxInfo{
+			PodName:      sbx.Name,
+			PodNamespace: sbx.Namespace,
+			SandboxID:    fmt.Sprintf("%s-%s-%s", sbx.Namespace, sbx.Name, sbx.UID),
+			SandboxName:  sbx.Name,
+			SandboxUID:   string(sbx.UID),
+		},
+		Metadata: metadata,
+	})
+	if err != nil {
+		log.Error(err, "failed to issue security token")
+		return time.Since(start), fmt.Errorf("failed to issue security token: %w", err)
+	}
+
+	// Write the issued access token back into the options for downstream use
+	opts.AccessToken = tokenResp.AccessToken
+	log.Info("security token issued", "costTime", time.Since(start))
+	return time.Since(start), nil
+}
+
 var FilteredAnnotationsOnCreation []string
 
 func newSandboxFromSandboxSet(opts infra.ClaimSandboxOptions, cache *Cache, client *clients.ClientSet, limiter *rate.Limiter) (*Sandbox, infra.LockType, error) {
@@ -507,8 +625,8 @@ func modifyPickedSandbox(sbx *Sandbox, lockType infra.LockType, opts infra.Claim
 			return fmt.Errorf("failed to marshal init runtime options: %w", err)
 		}
 		annotations[v1alpha1.AnnotationInitRuntimeRequest] = string(initRuntimeJSON)
-		if opts.InitRuntime.AccessToken != "" {
-			annotations[v1alpha1.AnnotationRuntimeAccessToken] = opts.InitRuntime.AccessToken
+		if opts.InitRuntime.AccessToken != nil && opts.InitRuntime.AccessToken.AccessToken != "" {
+			annotations[v1alpha1.AnnotationRuntimeAccessToken] = opts.InitRuntime.AccessToken.AccessToken
 		}
 	}
 
@@ -518,6 +636,15 @@ func modifyPickedSandbox(sbx *Sandbox, lockType infra.LockType, opts infra.Claim
 			// record the csi mount config to annotation
 			annotations[models.ExtensionKeyClaimWithCSIMount_MountConfig] = opts.CSIMount.MountOptionListRaw
 		}
+	}
+
+	// record security identity info into annotation
+	if opts.SecurityToken != nil {
+		securityIdentityJSON, err := json.Marshal(opts.SecurityToken)
+		if err != nil {
+			return fmt.Errorf("failed to marshal security token options: %w", err)
+		}
+		annotations[models.ExtensionKeyClaimWithSecurityIdentityProvider] = string(securityIdentityJSON)
 	}
 
 	sbx.SetAnnotations(annotations)

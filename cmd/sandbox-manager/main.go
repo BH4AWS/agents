@@ -31,6 +31,7 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	"github.com/openkruise/agents/pkg/identityprovider"
 	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/servers/e2b"
@@ -196,6 +197,10 @@ func main() {
 			K8sClient:          clientSet.K8sClient,
 		}
 	}
+
+	// Initialize the identity provider based on SecurityIdentityProviderGate feature gate.
+	// Must be called after pflag.Parse() and before the sandbox controller starts.
+	identityprovider.InitProvider()
 
 	sandboxController := e2b.NewController(domain, sysNs, sandboxNamespace, sandboxLabelSelector, e2bMaxTimeout, maxClaimWorkers, maxCreateQPS, uint32(extProcMaxConcurrency),
 		port, memberlistBindPort, keyCfg, clientSet)
