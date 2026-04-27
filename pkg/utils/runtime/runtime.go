@@ -24,17 +24,20 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/openkruise/agents/pkg/cache"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/openkruise/agents/pkg/cache"
+
 	"github.com/openkruise/agents/api/v1alpha1"
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 
 	"github.com/openkruise/agents/pkg/agent-runtime/storages"
+
+	"github.com/openkruise/agents/pkg/identityprovider"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
@@ -50,6 +53,23 @@ import (
 )
 
 var AccessToken = "access-token"
+
+func init() {
+	// Inject RunCommandFunc adapter so identityprovider can execute commands in sandbox runtimes.
+	// Propagator registration is handled by identityprovider/inner_config.go init().
+	// Community code does not import utils/runtime, so this init() never fires.
+	identityprovider.SetRunCommandFunc(runCommandFuncAdapter)
+}
+
+// runCommandFuncAdapter adapts RunCommandWithRuntime to the identityprovider.RunCommandFunc signature.
+func runCommandFuncAdapter(ctx context.Context, sbx *agentsv1alpha1.Sandbox, processConfig *process.ProcessConfig, timeout time.Duration) (stdout, stderr []string, exitCode int32, err error) {
+	result, err := RunCommandWithRuntime(ctx, RunCmdFuncArgs{
+		Sbx:           sbx,
+		ProcessConfig: processConfig,
+		Timeout:       timeout,
+	})
+	return result.Stdout, result.Stderr, result.ExitCode, err
+}
 
 func GetRuntimeURL(sbx *agentsv1alpha1.Sandbox) string {
 	// firstly, get runtime url from the annotation
