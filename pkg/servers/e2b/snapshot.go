@@ -18,6 +18,7 @@ func (sc *Controller) CreateSnapshot(r *http.Request) (web.ApiResponse[*models.S
 	ctx := r.Context()
 	sandboxID := r.PathValue("sandboxID")
 	log := klog.FromContext(ctx)
+	start := time.Now()
 	request, parseErr := sc.parseCreateSnapshotRequest(r)
 	if parseErr != nil {
 		return web.ApiResponse[*models.Snapshot]{}, parseErr
@@ -42,10 +43,13 @@ func (sc *Controller) CreateSnapshot(r *http.Request) (web.ApiResponse[*models.S
 	})
 	if err != nil {
 		log.Error(err, "failed to create checkpoint")
+		snapshotTotal.WithLabelValues("failure").Inc()
 		return web.ApiResponse[*models.Snapshot]{}, &web.ApiError{
 			Message: err.Error(),
 		}
 	}
+	snapshotDuration.Observe(time.Since(start).Seconds())
+	snapshotTotal.WithLabelValues("success").Inc()
 	return web.ApiResponse[*models.Snapshot]{
 		Code: http.StatusCreated,
 		Body: &models.Snapshot{
