@@ -33,6 +33,7 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/agent-runtime/storages"
 	"github.com/openkruise/agents/pkg/features"
+	"github.com/openkruise/agents/pkg/identity"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/expectations"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
@@ -442,19 +443,19 @@ func (r *commonControl) createPod(ctx context.Context, box *agentsv1alpha1.Sandb
 
 // ensureGatewayCACert ensures the gateway CA certificate Secret exists in the given namespace.
 func (r *commonControl) ensureGatewayCACert(ctx context.Context, namespace string) error {
-	injector := NewGatewayCACertInjector(r.Client)
+	injector := identity.NewGatewayCACertInjector(r.Client)
 	return injector.EnsureGatewayCACert(ctx, namespace)
 }
 
 // InjectGatewayCAVolume appends the gateway CA certificate Secret volume to the pod spec.
 func InjectGatewayCAVolume(pod *corev1.Pod) {
-	injector := NewGatewayCACertInjector(nil)
+	injector := identity.NewGatewayCACertInjector(nil)
 	injector.InjectGatewayCAVolume(pod)
 }
 
 // InjectGatewayCAVolumeMount appends the gateway CA certificate volume mount to the main container.
 func InjectGatewayCAVolumeMount(pod *corev1.Pod) {
-	injector := NewGatewayCACertInjector(nil)
+	injector := identity.NewGatewayCACertInjector(nil)
 	injector.InjectGatewayCAVolumeMount(pod)
 }
 

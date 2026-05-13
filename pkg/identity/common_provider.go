@@ -55,10 +55,14 @@ func (u *defaultIdentityProvider) PropagateSecurityToken(_ context.Context, _ *a
 	return nil
 }
 
-// GetProxyCABundle is a no-op for the default provider.
-// Default mode does not have a proxy CA certificate configured.
+// GetProxyCABundle returns an empty CA bundle for the default/community provider.
+// Community version of OpenKruise Agents does not include a proxy CA certificate.
+// Enterprise deployments can provide their own IdentityProvider implementation
+// that fetches the CA bundle from an identity provider service.
 func (u *defaultIdentityProvider) GetProxyCABundle(_ context.Context, _ GetProxyCABundleRequest) (*GetProxyCABundleResponse, error) {
-	return &GetProxyCABundleResponse{}, nil
+	return &GetProxyCABundleResponse{
+		CABundle: "",
+	}, nil
 }
 
 // fallbackTokenProvider wraps a primary TokenProvider and falls back to the

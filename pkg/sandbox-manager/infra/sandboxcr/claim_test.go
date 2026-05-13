@@ -2582,34 +2582,6 @@ func TestModifyPickedSandbox_InitRuntime(t *testing.T) {
 	}
 }
 
-// mockIdentityProvider is a configurable mock for testing TryClaimSandbox security token flows.
-type mockIdentityProvider struct {
-	issueTokenFunc func(ctx context.Context, req identity.TokenRequest) (*identity.TokenResponse, error)
-	propagateFunc  func(ctx context.Context, sbx *v1alpha1.Sandbox, tokenResp *identity.TokenResponse) error
-	getCABundleFunc func(ctx context.Context, req identity.GetProxyCABundleRequest) (*identity.GetProxyCABundleResponse, error)
-}
-
-func (m *mockIdentityProvider) IssueToken(ctx context.Context, req identity.TokenRequest) (*identity.TokenResponse, error) {
-	if m.issueTokenFunc != nil {
-		return m.issueTokenFunc(ctx, req)
-	}
-	return &identity.TokenResponse{AccessToken: uuid.NewString()}, nil
-}
-
-func (m *mockIdentityProvider) PropagateSecurityToken(ctx context.Context, sbx *v1alpha1.Sandbox, tokenResp *identity.TokenResponse) error {
-	if m.propagateFunc != nil {
-		return m.propagateFunc(ctx, sbx, tokenResp)
-	}
-	return nil
-}
-
-func (m *mockIdentityProvider) GetProxyCABundle(ctx context.Context, req identity.GetProxyCABundleRequest) (*identity.GetProxyCABundleResponse, error) {
-	if m.getCABundleFunc != nil {
-		return m.getCABundleFunc(ctx, req)
-	}
-	return &identity.GetProxyCABundleResponse{}, nil
-}
-
 //goland:noinspection GoDeprecation
 func TestTryClaimSandbox_SecurityToken(t *testing.T) {
 	utils.InitLogOutput()
@@ -2626,7 +2598,7 @@ func TestTryClaimSandbox_SecurityToken(t *testing.T) {
 	tests := []struct {
 		name         string
 		options      infra.ClaimSandboxOptions
-		mockProvider *mockIdentityProvider
+		mockProvider *identity.MockIdentityProvider
 		preModifier  func(sbx *v1alpha1.Sandbox)
 		expectError  string
 		postCheck    func(t *testing.T, sbx infra.Sandbox, metrics infra.ClaimMetrics)
@@ -2643,11 +2615,11 @@ func TestTryClaimSandbox_SecurityToken(t *testing.T) {
 					TokenResponse: identity.TokenResponse{AccessToken: "placeholder"},
 				},
 			},
-			mockProvider: &mockIdentityProvider{
-				issueTokenFunc: func(ctx context.Context, req identity.TokenRequest) (*identity.TokenResponse, error) {
+			mockProvider: &identity.MockIdentityProvider{
+				IssueTokenFunc: func(ctx context.Context, req identity.TokenRequest) (*identity.TokenResponse, error) {
 					return &identity.TokenResponse{AccessToken: "secure-token-123"}, nil
 				},
-				propagateFunc: func(ctx context.Context, sbx *v1alpha1.Sandbox, tokenResp *identity.TokenResponse) error {
+				PropagateTokenFunc: func(ctx context.Context, sbx *v1alpha1.Sandbox, tokenResp *identity.TokenResponse) error {
 					return nil
 				},
 			},
@@ -2676,8 +2648,8 @@ func TestTryClaimSandbox_SecurityToken(t *testing.T) {
 					TokenResponse: identity.TokenResponse{AccessToken: "placeholder"},
 				},
 			},
-			mockProvider: &mockIdentityProvider{
-				issueTokenFunc: func(ctx context.Context, req identity.TokenRequest) (*identity.TokenResponse, error) {
+			mockProvider: &identity.MockIdentityProvider{
+				IssueTokenFunc: func(ctx context.Context, req identity.TokenRequest) (*identity.TokenResponse, error) {
 					return nil, fmt.Errorf("identity provider unavailable")
 				},
 			},
@@ -2702,11 +2674,11 @@ func TestTryClaimSandbox_SecurityToken(t *testing.T) {
 					TokenResponse: identity.TokenResponse{AccessToken: "placeholder"},
 				},
 			},
-			mockProvider: &mockIdentityProvider{
-				issueTokenFunc: func(ctx context.Context, req identity.TokenRequest) (*identity.TokenResponse, error) {
+			mockProvider: &identity.MockIdentityProvider{
+				IssueTokenFunc: func(ctx context.Context, req identity.TokenRequest) (*identity.TokenResponse, error) {
 					return &identity.TokenResponse{AccessToken: "secure-token-456"}, nil
 				},
-				propagateFunc: func(ctx context.Context, sbx *v1alpha1.Sandbox, tokenResp *identity.TokenResponse) error {
+				PropagateTokenFunc: func(ctx context.Context, sbx *v1alpha1.Sandbox, tokenResp *identity.TokenResponse) error {
 					return fmt.Errorf("propagation failed")
 				},
 			},
@@ -2721,8 +2693,8 @@ func TestTryClaimSandbox_SecurityToken(t *testing.T) {
 					AccessToken:     "some-token",
 				},
 			},
-			mockProvider: &mockIdentityProvider{
-				issueTokenFunc: func(ctx context.Context, req identity.TokenRequest) (*identity.TokenResponse, error) {
+			mockProvider: &identity.MockIdentityProvider{
+				IssueTokenFunc: func(ctx context.Context, req identity.TokenRequest) (*identity.TokenResponse, error) {
 					t.Fatal("IssueToken should not be called when token type is not UUID")
 					return nil, nil
 				},
@@ -2741,8 +2713,8 @@ func TestTryClaimSandbox_SecurityToken(t *testing.T) {
 				User:     user,
 				Template: existTemplate,
 			},
-			mockProvider: &mockIdentityProvider{
-				issueTokenFunc: func(ctx context.Context, req identity.TokenRequest) (*identity.TokenResponse, error) {
+			mockProvider: &identity.MockIdentityProvider{
+				IssueTokenFunc: func(ctx context.Context, req identity.TokenRequest) (*identity.TokenResponse, error) {
 					t.Fatal("IssueToken should not be called when InitRuntime is nil")
 					return nil, nil
 				},

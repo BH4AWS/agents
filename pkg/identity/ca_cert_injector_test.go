@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package core
+package identity
 
 import (
 	"context"
@@ -24,31 +24,16 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/identity"
+	v1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 )
 
-// mockIdentityProvider implements identity.IdentityProvider for testing.
-type mockIdentityProvider struct {
-	getCABundleFunc func(ctx context.Context, req identity.GetProxyCABundleRequest) (*identity.GetProxyCABundleResponse, error)
-}
-
-func (m *mockIdentityProvider) IssueToken(ctx context.Context, req identity.TokenRequest) (*identity.TokenResponse, error) {
-	return nil, nil
-}
-
-func (m *mockIdentityProvider) PropagateSecurityToken(ctx context.Context, sbx *agentsv1alpha1.Sandbox, tokenResp *identity.TokenResponse) error {
-	return nil
-}
-
-func (m *mockIdentityProvider) GetProxyCABundle(ctx context.Context, req identity.GetProxyCABundleRequest) (*identity.GetProxyCABundleResponse, error) {
-	if m.getCABundleFunc != nil {
-		return m.getCABundleFunc(ctx, req)
-	}
-	return &identity.GetProxyCABundleResponse{CABundle: "test-proxy-ca-bundle"}, nil
+func init() {
+	utilruntime.Must(v1alpha1.AddToScheme(scheme.Scheme))
 }
 
 func TestGatewayCACertInjector_EnsureGatewayCACert(t *testing.T) {
@@ -78,49 +63,49 @@ func TestGatewayCACertInjector_EnsureGatewayCACert(t *testing.T) {
 			},
 		},
 		{
-			name:          "secret does not exist - create from identity provider",
+			name:            "secret does not exist - create from identity provider",
 			existingSecrets: []client.Object{},
-			proxyCABundle: "test-gateway-ca-content",
+			proxyCABundle:   "test-gateway-ca-content",
 			checkSecret: func(t *testing.T, cli client.Client) {
 				var secret corev1.Secret
 				err := cli.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: gatewayCASecretName}, &secret)
 				require.NoError(t, err)
 				assert.Equal(t, []byte("test-gateway-ca-content"), secret.Data[GatewayCAKey])
-				assert.Equal(t, "proxy", secret.Labels["agents.kruise.io/ca-type"])
+				assert.Equal(t, "gateway", secret.Labels["agents.kruise.io/ca-type"])
 			},
 		},
 		{
-			name: "identity provider returns error - should block",
+			name:            "identity provider returns error - should block",
 			existingSecrets: []client.Object{},
-			proxyCABundle: "",
-			providerErr:   "identity provider unreachable",
-			expectError:   "failed to get gateway CA bundle",
+			proxyCABundle:   "",
+			providerErr:     "identity provider unreachable",
+			expectError:     "failed to get gateway CA bundle",
 		},
 		{
-			name:          "identity provider returns empty CA bundle - should block",
+			name:            "identity provider returns empty CA bundle - should block",
 			existingSecrets: []client.Object{},
-			proxyCABundle: "",
-			expectError:   "empty gateway CA bundle",
+			proxyCABundle:   "",
+			expectError:     "empty gateway CA bundle",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Mock the identity provider's GetProxyCABundle
-			originalProvider := identity.DefaultProvider
-			defer func() { identity.DefaultProvider = originalProvider }()
+			originalProvider := DefaultProvider
+			defer func() { DefaultProvider = originalProvider }()
 
-			identity.DefaultProvider = &mockIdentityProvider{
-				getCABundleFunc: func(_ context.Context, _ identity.GetProxyCABundleRequest) (*identity.GetProxyCABundleResponse, error) {
+			DefaultProvider = &MockIdentityProvider{
+				GetCABundleFunc: func(_ context.Context, _ GetProxyCABundleRequest) (*GetProxyCABundleResponse, error) {
 					if tt.providerErr != "" {
 						return nil, assert.AnError
 					}
-					return &identity.GetProxyCABundleResponse{CABundle: tt.proxyCABundle}, nil
+					return &GetProxyCABundleResponse{CABundle: tt.proxyCABundle}, nil
 				},
 			}
 
 			fakeClient := fake.NewClientBuilder().
-				WithScheme(scheme).
+				WithScheme(scheme.Scheme).
 				WithObjects(tt.existingSecrets...).
 				Build()
 
@@ -300,7 +285,7 @@ func TestGatewayCACertInjector_secretExists(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fakeClient := fake.NewClientBuilder().
-				WithScheme(scheme).
+				WithScheme(scheme.Scheme).
 				WithObjects(tt.existingSecrets...).
 				Build()
 
@@ -322,16 +307,16 @@ func TestGatewayCACertInjector_EnsureGatewayCACert_ConcurrentCreate(t *testing.T
 	// Test that concurrent creation attempts don't cause errors
 	// (IsAlreadyExists is handled gracefully)
 	// Mock the identity provider
-	originalProvider := identity.DefaultProvider
-	defer func() { identity.DefaultProvider = originalProvider }()
-	identity.DefaultProvider = &mockIdentityProvider{
-		getCABundleFunc: func(_ context.Context, _ identity.GetProxyCABundleRequest) (*identity.GetProxyCABundleResponse, error) {
-			return &identity.GetProxyCABundleResponse{CABundle: "test-gateway-ca"}, nil
+	originalProvider := DefaultProvider
+	defer func() { DefaultProvider = originalProvider }()
+	DefaultProvider = &MockIdentityProvider{
+		GetCABundleFunc: func(_ context.Context, _ GetProxyCABundleRequest) (*GetProxyCABundleResponse, error) {
+			return &GetProxyCABundleResponse{CABundle: "test-gateway-ca"}, nil
 		},
 	}
 
 	fakeClient := fake.NewClientBuilder().
-		WithScheme(scheme).
+		WithScheme(scheme.Scheme).
 		WithObjects(
 			&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: gatewayCASecretName, Namespace: "default"}},
 		).

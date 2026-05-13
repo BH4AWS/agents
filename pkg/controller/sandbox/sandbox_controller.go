@@ -72,10 +72,10 @@ func Add(mgr manager.Manager) error {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		controls: core.NewSandboxControl(core.SandboxControlArgs{
-			Client:         mgr.GetClient(),
-			APIReader:      mgr.GetAPIReader(),
-			Recorder:       mgr.GetEventRecorderFor("sandbox"),
-			RateLimiter:    rateLimiter,
+			Client:      mgr.GetClient(),
+			APIReader:   mgr.GetAPIReader(),
+			Recorder:    mgr.GetEventRecorderFor("sandbox"),
+			RateLimiter: rateLimiter,
 		}), rateLimiter: rateLimiter,
 	}).SetupWithManager(mgr)
 	if err != nil {

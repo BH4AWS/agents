@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package core
+package identity
 
 import (
 	"context"
@@ -25,8 +25,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	"github.com/openkruise/agents/pkg/identity"
 )
 
 const (
@@ -142,7 +140,7 @@ func (inj *GatewayCACertInjector) ensureGatewayCASecret(ctx context.Context, nam
 	klog.InfoS("gateway CA secret not found, fetching from identity provider",
 		"namespace", namespace, "secret", gatewayCASecretName)
 
-	resp, err := identity.DefaultProvider.GetProxyCABundle(ctx, identity.GetProxyCABundleRequest{})
+	resp, err := DefaultProvider.GetProxyCABundle(ctx, GetProxyCABundleRequest{})
 	if err != nil {
 		return fmt.Errorf("failed to get gateway CA bundle from identity provider: %w", err)
 	}
@@ -155,7 +153,7 @@ func (inj *GatewayCACertInjector) ensureGatewayCASecret(ctx context.Context, nam
 			Name:      gatewayCASecretName,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"agents.kruise.io/ca-type": "proxy",
+				"agents.kruise.io/ca-type": "gateway",
 			},
 		},
 		Data: map[string][]byte{
