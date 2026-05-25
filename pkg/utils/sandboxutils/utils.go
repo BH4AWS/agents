@@ -24,8 +24,51 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/proxy"
+	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/utils"
 )
+
+// GetRuntimeURL resolves the agent-runtime endpoint for a Sandbox.
+//
+// Lookup order:
+//  1. AnnotationRuntimeURL on the Sandbox object.
+//  2. AnnotationEnvdURL on the Sandbox object (legacy key, kept for backwards compatibility).
+//  3. Pod IP from the cached route plus the well-known consts.RuntimePort, used as a fallback
+//     while the controller has not yet stamped the URL annotation.
+//
+// Returns an empty string when none of the sources is usable (e.g. the pod has not been scheduled
+// yet). Callers must treat an empty result as "not ready" and either skip or retry.
+func GetRuntimeURL(sbx *agentsv1alpha1.Sandbox) string {
+	if sbx == nil {
+		return ""
+	}
+	annotations := sbx.GetAnnotations()
+	if u := annotations[agentsv1alpha1.AnnotationRuntimeURL]; u != "" {
+		return u
+	}
+	if u := annotations[agentsv1alpha1.AnnotationEnvdURL]; u != "" { // legacy
+		return u
+	}
+	route := GetRouteFromSandbox(sbx)
+	if route.IP == "" {
+		return ""
+	}
+	return fmt.Sprintf("http://%s:%d", route.IP, consts.RuntimePort)
+}
+
+// GetAccessToken resolves the agent-runtime access token from object annotations, falling back
+// to the legacy envd annotation key for backwards compatibility. Accepts metav1.Object so that
+// it works for both Sandbox and SandboxClaim objects.
+func GetAccessToken(obj metav1.Object) string {
+	if obj == nil {
+		return ""
+	}
+	annotations := obj.GetAnnotations()
+	if t := annotations[agentsv1alpha1.AnnotationRuntimeAccessToken]; t != "" {
+		return t
+	}
+	return annotations[agentsv1alpha1.AnnotationEnvdAccessToken] // legacy
+}
 
 func GetRouteFromSandbox(s *agentsv1alpha1.Sandbox) proxy.Route {
 	state, _ := GetSandboxState(s)

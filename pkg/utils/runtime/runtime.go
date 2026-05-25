@@ -57,31 +57,6 @@ import (
 
 var AccessToken = "access-token"
 
-func GetRuntimeURL(sbx *agentsv1alpha1.Sandbox) string {
-	// firstly, get runtime url from the annotation
-	url := sbx.GetAnnotations()[agentsv1alpha1.AnnotationRuntimeURL]
-	if url == "" {
-		url = sbx.GetAnnotations()[agentsv1alpha1.AnnotationEnvdURL] // legacy
-	}
-	if url != "" {
-		return url
-	}
-	// secondly, calculate runtime url from the route
-	route := sandboxutils.GetRouteFromSandbox(sbx)
-	if route.IP == "" {
-		return ""
-	}
-	return fmt.Sprintf("http://%s:%d", route.IP, consts.RuntimePort)
-}
-
-func GetAccessToken(sbx metav1.Object) string {
-	token := sbx.GetAnnotations()[agentsv1alpha1.AnnotationRuntimeAccessToken]
-	if token == "" {
-		token = sbx.GetAnnotations()[agentsv1alpha1.AnnotationEnvdAccessToken] // legacy
-	}
-	return token
-}
-
 type RunCommandResult struct {
 	PID      uint32
 	Stdout   []string
@@ -100,7 +75,7 @@ type RunCmdFuncArgs struct {
 func RunCommandWithRuntime(ctx context.Context, args RunCmdFuncArgs) (RunCommandResult, error) {
 	sbx, processConfig, timeout := args.Sbx, args.ProcessConfig, args.Timeout
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbx)).V(consts.DebugLogLevel)
-	url := GetRuntimeURL(sbx)
+	url := sandboxutils.GetRuntimeURL(sbx)
 	if url == "" {
 		return RunCommandResult{}, fmt.Errorf("runtime url not found on sandbox")
 	}
@@ -113,7 +88,7 @@ func RunCommandWithRuntime(ctx context.Context, args RunCmdFuncArgs) (RunCommand
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	clientContext, callInfo := connect.NewClientContext(ctxWithTimeout)
-	callInfo.RequestHeader().Set("X-Access-Token", GetAccessToken(sbx))
+	callInfo.RequestHeader().Set("X-Access-Token", sandboxutils.GetAccessToken(sbx))
 	callInfo.RequestHeader().Set("Authorization", "Basic cm9vdDo=") // Basic root:
 
 	req := connect.NewRequest(&process.StartRequest{
@@ -238,7 +213,7 @@ func WriteFileWithRuntime(ctx context.Context, args WriteFileArgs) (WriteFileRes
 	}
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbx)).V(consts.DebugLogLevel)
 
-	rtURL := GetRuntimeURL(sbx)
+	rtURL := sandboxutils.GetRuntimeURL(sbx)
 	if rtURL == "" {
 		return WriteFileResult{}, fmt.Errorf("runtime url not found on sandbox")
 	}
@@ -265,7 +240,7 @@ func WriteFileWithRuntime(ctx context.Context, args WriteFileArgs) (WriteFileRes
 		return WriteFileResult{}, fmt.Errorf("failed to build runtime files write request: %w", err)
 	}
 	req.Header.Set("Content-Type", contentType)
-	if accessToken := GetAccessToken(sbx); accessToken != "" {
+	if accessToken := sandboxutils.GetAccessToken(sbx); accessToken != "" {
 		req.Header.Set("X-Access-Token", accessToken)
 	}
 	// Basic auth header mirrors the agent-runtime expectation (root user, empty password)
@@ -418,7 +393,7 @@ func InitRuntime(ctx context.Context, sbx *agentsv1alpha1.Sandbox, opts config.I
 			}
 			currentSbx = updated
 		}
-		runtimeURL := GetRuntimeURL(currentSbx)
+		runtimeURL := sandboxutils.GetRuntimeURL(currentSbx)
 		if runtimeURL == "" {
 			log.Error(nil, "runtimeURL is empty")
 			return fmt.Errorf("runtimeURL is empty")
