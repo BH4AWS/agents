@@ -3534,7 +3534,7 @@ func TestTryClaimSandbox_SecurityToken(t *testing.T) {
 			},
 		},
 		{
-			name: "issue security token failure falls back to UUID transparently",
+			name: "issue security token failure returns retriable error",
 			options: infra.ClaimSandboxOptions{
 				User:     user,
 				Template: existTemplate,
@@ -3549,19 +3549,12 @@ func TestTryClaimSandbox_SecurityToken(t *testing.T) {
 				issueTokenFunc: func(ctx context.Context, req identity.TokenRequest) (*identity.TokenResponse, error) {
 					return nil, fmt.Errorf("identity provider unavailable")
 				},
+				propagateFunc: func(ctx context.Context, sbx *v1alpha1.Sandbox, tokenResp *identity.TokenResponse) error {
+					t.Fatalf("PropagateSecurityToken must not be called when IssueToken fails")
+					return nil
+				},
 			},
-			postCheck: func(t *testing.T, sbx infra.Sandbox, metrics infra.ClaimMetrics) {
-				// Fallback generates a UUID token automatically, so claim succeeds
-				annotations := sbx.GetAnnotations()
-				assert.Equal(t, "original-uuid-token", annotations[v1alpha1.AnnotationRuntimeAccessToken])
-				// TokenRefreshStatus IS set because fallback issuance succeeded
-				raw := annotations[pkgutils.AgentKeyTokenRefreshStatus]
-				assert.NotEmpty(t, raw)
-				var decoded identity.TokenRefreshStatus
-				require.NoError(t, json.Unmarshal([]byte(raw), &decoded))
-				// SecurityToken metrics should be recorded
-				assert.Greater(t, metrics.SecurityToken, time.Duration(0))
-			},
+			expectError: "security token issuance failed",
 		},
 		{
 			name: "propagate security token failure returns retriable error",
