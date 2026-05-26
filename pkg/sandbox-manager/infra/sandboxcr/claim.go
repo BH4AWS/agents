@@ -234,39 +234,39 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 	// Step 4: When SecurityIdentityProvider feature gate is enabled,
 	// the manager attempts to issue a security token via the identity provider, records its refresh status into
 	// sandbox annotations, and propagate the token to the runtime.
-	// On token issuance failure, the original UUID token is preserved (fallback behavior).
-	// On status recording or propagation failure, a retriable error is returned.
+	// Any failure in issuance, status recording, or propagation returns a retriable error so callers can retry.
+	// We deliberately do NOT degrade to a UUID token on issuance failure: a UUID carries no identity and would
+	// be propagated to the runtime as a meaningless credential, masking real provider outages.
 	if utilfeature.DefaultFeatureGate.Enabled(features.SecurityIdentityProviderGate) {
 		opts.SecurityToken = &config.SecurityTokenOptions{}
 		log.Info("starting to issue security token via identity provider")
 		metrics.SecurityToken, err = issueSecurityToken(ctx, sbx, opts.SecurityToken)
-		if err == nil {
-			metrics.Total += metrics.SecurityToken
-			// 4.1: to record security token refresh status in sandbox annotations.
-			// At this point modifyPickedSandbox has already persisted the locking
-			// patch, so additional annotation mutations on sbx.Sandbox would only
-			// live in memory. We patch via the apiserver here to actually persist
-			// the refresh status, and keep sbx.Sandbox in sync with the patched object.
-			if err = recordSecurityTokenRefreshStatus(ctx, cache.GetClient(), sbx, opts); err != nil {
-				log.Error(err, "failed to modify picked sandbox for security token status")
-				err = retriableError{Message: fmt.Sprintf("failed to modify picked sandbox for security token status: %s", err)}
-				return
-			}
-
-			log.Info("propagating security token to runtime", "propagatorCount", identity.SecurityTokenPropagatorCount())
-			startTime := time.Now()
-			// 4.2: to propagate security token to runtime
-			if err = identity.PropagateSecurityToken(ctx, sbx.Sandbox, &opts.SecurityToken.TokenResponse); err != nil {
-				log.Error(err, "security token propagation failed")
-				err = retriableError{Message: fmt.Sprintf("security token propagation failed: %s", err)}
-				return
-			}
-			log.Info("security token propagated", "cost", time.Since(startTime))
-
-		} else {
-			log.Error(err, "failed to issue security token, keeping original UUID token as fallback")
-			err = nil // clear error to avoid affecting downstream flow
+		if err != nil {
+			log.Error(err, "failed to issue security token")
+			err = retriableError{Message: fmt.Sprintf("security token issuance failed: %s", err)}
+			return
 		}
+		metrics.Total += metrics.SecurityToken
+		// 4.1: to record security token refresh status in sandbox annotations.
+		// At this point modifyPickedSandbox has already persisted the locking
+		// patch, so additional annotation mutations on sbx.Sandbox would only
+		// live in memory. We patch via the apiserver here to actually persist
+		// the refresh status, and keep sbx.Sandbox in sync with the patched object.
+		if err = recordSecurityTokenRefreshStatus(ctx, cache.GetClient(), sbx, opts); err != nil {
+			log.Error(err, "failed to modify picked sandbox for security token status")
+			err = retriableError{Message: fmt.Sprintf("failed to modify picked sandbox for security token status: %s", err)}
+			return
+		}
+
+		log.Info("propagating security token to runtime", "propagatorCount", identity.SecurityTokenPropagatorCount())
+		startTime := time.Now()
+		// 4.2: to propagate security token to runtime
+		if err = identity.PropagateSecurityToken(ctx, sbx.Sandbox, &opts.SecurityToken.TokenResponse); err != nil {
+			log.Error(err, "security token propagation failed")
+			err = retriableError{Message: fmt.Sprintf("security token propagation failed: %s", err)}
+			return
+		}
+		log.Info("security token propagated", "cost", time.Since(startTime))
 	}
 
 	if opts.CSIMount != nil {
