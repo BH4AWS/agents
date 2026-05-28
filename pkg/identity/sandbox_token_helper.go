@@ -71,3 +71,28 @@ func IssueSandboxToken(ctx context.Context, sbx *agentsv1alpha1.Sandbox) (*Token
 	log.Info("sandbox security token issued", "cost", cost)
 	return tokenResp, cost, nil
 }
+
+// PropagateSandboxToken propagates the freshly issued security token to the
+// runtime side via the registered SecurityTokenPropagators. It is the symmetric
+// twin of IssueSandboxToken: callers obtain a TokenResponse first (issue) and
+// then push it into the runtime (propagate).
+//
+// The function intentionally has no side-effect on the sandbox object — it
+// only delegates to PropagateSecurityToken while emitting uniform structured
+// logs (propagator count, cost) so every call site (claim flow, refresh
+// controller, future SDK helpers) shares the same observability surface.
+//
+// The error returned by the underlying provider is surfaced verbatim so
+// callers can decide their own retry / event semantics; this function never
+// wraps or rewrites it.
+func PropagateSandboxToken(ctx context.Context, sbx *agentsv1alpha1.Sandbox, tokenResp *TokenResponse) error {
+	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbx), "action", "PropagateSandboxToken")
+	start := time.Now()
+	log.Info("propagating sandbox security token", "propagatorCount", SecurityTokenPropagatorCount())
+	if err := PropagateSecurityToken(ctx, sbx, tokenResp); err != nil {
+		log.Error(err, "failed to propagate sandbox security token", "cost", time.Since(start))
+		return err
+	}
+	log.Info("sandbox security token propagated", "cost", time.Since(start))
+	return nil
+}

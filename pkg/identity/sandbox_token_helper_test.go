@@ -217,3 +217,102 @@ func TestIssueSandboxToken_DefaultProviderIntegration(t *testing.T) {
 // Compile-time guard: fakeIdentityProvider must satisfy IdentityProvider so it
 // is accepted by RegisterProvider.
 var _ IdentityProvider = (*fakeIdentityProvider)(nil)
+
+// propagatingFakeProvider is a stand-alone IdentityProvider whose IssueToken is
+// intentionally inert (it must NEVER be invoked by PropagateSandboxToken) and
+// whose PropagateSecurityToken is fully programmable — including a call counter
+// so tests can pin down "exactly one delegation per call".
+type propagatingFakeProvider struct {
+	gotSandbox *agentsv1alpha1.Sandbox
+	gotResp    *TokenResponse
+	calls      int
+	issueCalls int
+
+	err error
+}
+
+func (p *propagatingFakeProvider) IssueToken(_ context.Context, _ TokenRequest) (*TokenResponse, error) {
+	p.issueCalls++
+	return nil, nil
+}
+
+func (p *propagatingFakeProvider) PropagateSecurityToken(_ context.Context, sbx *agentsv1alpha1.Sandbox, resp *TokenResponse) error {
+	p.calls++
+	p.gotSandbox = sbx
+	p.gotResp = resp
+	return p.err
+}
+
+var _ IdentityProvider = (*propagatingFakeProvider)(nil)
+
+// TestPropagateSandboxToken locks down the contract that callers (claim flow
+// and the security-token refresh controller) rely on:
+//   - the helper delegates to the registered IdentityProvider exactly once;
+//   - on success it returns nil and never touches the issuance path;
+//   - on provider failure it surfaces the underlying error VERBATIM (no
+//     wrapping with fmt.Errorf), so callers can keep matching against stable
+//     error strings or unwrap with errors.Is.
+func TestPropagateSandboxToken(t *testing.T) {
+	tests := []struct {
+		name        string
+		fake        *propagatingFakeProvider
+		tokenResp   *TokenResponse
+		expectError string
+	}{
+		{
+			name: "success delegates to provider and returns nil",
+			fake: &propagatingFakeProvider{},
+			tokenResp: &TokenResponse{
+				AccessToken:           "tok",
+				AccessTokenExpiration: "2099-12-31T23:59:59Z",
+			},
+		},
+		{
+			name: "provider error is returned verbatim without wrapping",
+			fake: &propagatingFakeProvider{
+				err: errors.New("write to runtime failed"),
+			},
+			tokenResp:   &TokenResponse{AccessToken: "tok"},
+			expectError: "write to runtime failed",
+		},
+		{
+			name:      "nil tokenResp still reaches the provider for it to decide",
+			fake:      &propagatingFakeProvider{},
+			tokenResp: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			saved := provider
+			RegisterProvider(tt.fake)
+			t.Cleanup(func() { RegisterProvider(saved) })
+
+			sbx := &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "sbx-propagate",
+					Namespace: "default",
+					UID:       types.UID("uid-propagate"),
+				},
+			}
+
+			err := PropagateSandboxToken(context.Background(), sbx, tt.tokenResp)
+
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.EqualError(t, err, tt.expectError,
+					"helper must surface the provider error VERBATIM (no wrapping)")
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, 1, tt.fake.calls,
+				"helper must invoke provider.PropagateSecurityToken exactly once regardless of outcome")
+			assert.Equal(t, 0, tt.fake.issueCalls,
+				"helper must not touch the issuance path")
+			assert.Same(t, sbx, tt.fake.gotSandbox,
+				"helper must forward the original sandbox pointer without copying")
+			assert.Same(t, tt.tokenResp, tt.fake.gotResp,
+				"helper must forward the original TokenResponse pointer without copying")
+		})
+	}
+}

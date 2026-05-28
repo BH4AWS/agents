@@ -257,15 +257,11 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 			return
 		}
 
-		log.Info("propagating security token to runtime", "propagatorCount", identity.SecurityTokenPropagatorCount())
-		startTime := time.Now()
 		// 4.2: to propagate security token to runtime
-		if err = identity.PropagateSecurityToken(ctx, sbx.Sandbox, &opts.SecurityToken.TokenResponse); err != nil {
-			log.Error(err, "security token propagation failed")
+		if err = identity.PropagateSandboxToken(ctx, sbx.Sandbox, &opts.SecurityToken.TokenResponse); err != nil {
 			err = retriableError{Message: fmt.Sprintf("security token propagation failed: %s", err)}
 			return
 		}
-		log.Info("security token propagated", "cost", time.Since(startTime))
 	}
 
 	if opts.CSIMount != nil {
