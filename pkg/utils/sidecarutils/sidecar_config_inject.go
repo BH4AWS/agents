@@ -28,10 +28,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/webhookutils"
 )
+
+func IsRuntimeEnabled(sandbox *agentsv1alpha1.Sandbox, runtimeName string) bool {
+	for _, runtime := range sandbox.Spec.Runtimes {
+		if runtime.Name == runtimeName {
+			return true
+		}
+	}
+	return false
+}
 
 func fetchInjectionConfiguration(ctx context.Context, cli client.Client) (map[string]string, error) {
 	logger := logf.FromContext(ctx)

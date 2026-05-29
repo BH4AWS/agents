@@ -27,6 +27,9 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/features"
+	"github.com/openkruise/agents/pkg/identity"
+	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
 	trafficproxy "github.com/openkruise/agents/pkg/utils/sidecarutils/traffic-proxy"
 )
 
@@ -43,7 +46,7 @@ func InjectSandboxRuntimes(ctx context.Context, sandbox *agentsv1alpha1.Sandbox,
 		return err
 	}
 
-	return doSidecarInjection(ctx, extractRuntimes(sandbox), pod, config)
+	return doSidecarInjection(ctx, sandbox, pod, config)
 }
 
 func extractRuntimes(sandbox *agentsv1alpha1.Sandbox) []string {
@@ -54,9 +57,10 @@ func extractRuntimes(sandbox *agentsv1alpha1.Sandbox) []string {
 	return runtimes
 }
 
-func doSidecarInjection(ctx context.Context, runtimes []string, pod *corev1.Pod, injectConfigMap map[string]string) error {
+func doSidecarInjection(ctx context.Context, sandbox *agentsv1alpha1.Sandbox, pod *corev1.Pod, injectConfigMap map[string]string) error {
 	logger := logf.FromContext(ctx)
 
+	runtimes := extractRuntimes(sandbox)
 	injectedRuntimes := sets.NewString()
 	for _, runtime := range runtimes {
 		if injectedRuntimes.Has(runtime) {
@@ -95,6 +99,17 @@ func doSidecarInjection(ctx context.Context, runtimes []string, pod *corev1.Pod,
 			logger.Error(err, "failed to apply health probe rewrite")
 			return err
 		}
+	}
+
+	// Inject every enabled CA bundle as Volume + VolumeMount + EnvVar entries.
+	// SecurityIdentityProviderGate is the cluster-level kill switch; per-spec
+	// EnabledFor predicates (bound via identity.BindCAEnabledFor at controller
+	// startup) decide which specs apply to this sandbox. Runtime-level gating
+	// (e.g. traffic-proxy) lives exclusively inside those predicates to avoid
+	// drift with the caller side.
+	if utilfeature.DefaultFeatureGate.Enabled(features.SecurityIdentityProviderGate) {
+		identity.InjectAllCAVolumes(ctx, sandbox, pod)
+		identity.InjectAllCAIntoContainers(ctx, sandbox, pod)
 	}
 
 	return nil
