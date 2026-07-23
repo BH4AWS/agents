@@ -5769,3 +5769,83 @@ func TestRejectCleanup(t *testing.T) {
 		}
 	})
 }
+
+// TestSyncMirroredPodAnnotations verifies the level-triggered pod->sandbox
+// annotation mirror: a mirrored key present on the pod is stamped onto the
+// sandbox, an absent key is removed, and a nil pod leaves the sandbox
+// untouched (paused sandboxes keep their last mirror until the next pod).
+func TestSyncMirroredPodAnnotations(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, agentsv1alpha1.AddToScheme(scheme))
+
+	tests := []struct {
+		name           string
+		boxAnnotations map[string]string
+		podAnnotations map[string]string // nil map with nilPod=false means pod without annotations
+		nilPod         bool
+		wantValue      string // expected sandbox annotation value after sync, "" means absent
+	}{
+		{
+			name:           "pod advertises TLS port, sandbox gets stamped",
+			podAnnotations: map[string]string{agentsv1alpha1.AnnotationRuntimeTLSPort: "49984"},
+			wantValue:      "49984",
+		},
+		{
+			name:           "pod value changed, sandbox is updated",
+			boxAnnotations: map[string]string{agentsv1alpha1.AnnotationRuntimeTLSPort: "49984"},
+			podAnnotations: map[string]string{agentsv1alpha1.AnnotationRuntimeTLSPort: "50000"},
+			wantValue:      "50000",
+		},
+		{
+			name:           "pod no longer advertises TLS, sandbox annotation removed",
+			boxAnnotations: map[string]string{agentsv1alpha1.AnnotationRuntimeTLSPort: "49984"},
+			podAnnotations: nil,
+			wantValue:      "",
+		},
+		{
+			name:           "already aligned, no change",
+			boxAnnotations: map[string]string{agentsv1alpha1.AnnotationRuntimeTLSPort: "49984"},
+			podAnnotations: map[string]string{agentsv1alpha1.AnnotationRuntimeTLSPort: "49984"},
+			wantValue:      "49984",
+		},
+		{
+			name:           "nil pod keeps stale mirror untouched",
+			boxAnnotations: map[string]string{agentsv1alpha1.AnnotationRuntimeTLSPort: "49984"},
+			nilPod:         true,
+			wantValue:      "49984",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			box := &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "mirror-sbx",
+					Namespace:   "default",
+					Annotations: tt.boxAnnotations,
+				},
+			}
+			var pod *corev1.Pod
+			if !tt.nilPod {
+				pod = &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:        "mirror-sbx",
+						Namespace:   "default",
+						Annotations: tt.podAnnotations,
+					},
+				}
+			}
+			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(box).Build()
+			r := &SandboxReconciler{Client: fakeClient}
+
+			require.NoError(t, r.syncMirroredPodAnnotations(context.Background(), box, pod))
+
+			// Both the in-memory object and the persisted object must agree.
+			persisted := &agentsv1alpha1.Sandbox{}
+			require.NoError(t, fakeClient.Get(context.Background(),
+				types.NamespacedName{Namespace: "default", Name: "mirror-sbx"}, persisted))
+			assert.Equal(t, tt.wantValue, box.Annotations[agentsv1alpha1.AnnotationRuntimeTLSPort])
+			assert.Equal(t, tt.wantValue, persisted.Annotations[agentsv1alpha1.AnnotationRuntimeTLSPort])
+		})
+	}
+}

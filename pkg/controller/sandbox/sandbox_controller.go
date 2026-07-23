@@ -282,6 +282,15 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 		return reconcile.Result{}, err
 	}
 
+	// Mirror runtime capability annotations from the pod onto the sandbox before
+	// any status write in this reconcile. Claim flows gate on the Ready
+	// condition, so persisting the mirror ahead of the status patch guarantees
+	// that a sandbox observed as Ready already advertises the capabilities of
+	// its actual pod (e.g. the runtime TLS port).
+	if err = r.syncMirroredPodAnnotations(ctx, box, pod); err != nil {
+		return reconcile.Result{}, err
+	}
+
 	// Check ShutdownTime and PauseTime.
 	result, done, timerErr := r.checkTimers(ctx, box, metav1.Now())
 	if done {
@@ -373,6 +382,55 @@ func (r *SandboxReconciler) addSandboxFinalizerAndHash(ctx context.Context, box 
 	}
 	klog.InfoS("patch sandbox hash annotations and finalizer success", "sandbox", klog.KObj(box))
 	return originObj, nil
+}
+
+// mirroredPodAnnotations lists the pod annotation keys that are mirrored onto
+// the owning Sandbox on every reconcile. Each key is aligned level-triggered:
+// present on the pod means stamped on the Sandbox, absent means removed. The
+// pod is the source of truth because the injection templates (ConfigMap)
+// declare these facts on the rendered pod, so the mirror always reflects the
+// capabilities of the pod that actually runs, surviving template rollbacks and
+// pod re-creation without manual repair.
+var mirroredPodAnnotations = []string{
+	agentsv1alpha1.AnnotationRuntimeTLSPort,
+}
+
+// syncMirroredPodAnnotations aligns the Sandbox annotations with the pod's for
+// every key in mirroredPodAnnotations and persists the change with a meta
+// patch. It must run before any status write in the same reconcile so that a
+// Ready sandbox always carries the annotations of its current pod. A nil pod
+// (paused or not yet created) is skipped: the stale mirror is harmless while
+// unreachable and is re-aligned right after the next pod is rendered.
+func (r *SandboxReconciler) syncMirroredPodAnnotations(ctx context.Context, box *agentsv1alpha1.Sandbox, pod *corev1.Pod) error {
+	if pod == nil {
+		return nil
+	}
+	patch := client.MergeFrom(box.DeepCopy())
+	changed := false
+	for _, key := range mirroredPodAnnotations {
+		podVal, onPod := pod.Annotations[key]
+		boxVal, onBox := box.Annotations[key]
+		switch {
+		case onPod && (!onBox || boxVal != podVal):
+			if box.Annotations == nil {
+				box.Annotations = map[string]string{}
+			}
+			box.Annotations[key] = podVal
+			changed = true
+		case !onPod && onBox:
+			delete(box.Annotations, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := client.IgnoreNotFound(r.Patch(ctx, box, patch)); err != nil {
+		klog.ErrorS(err, "failed to mirror pod annotations to sandbox", "sandbox", klog.KObj(box))
+		return fmt.Errorf("failed to mirror pod annotations: %w", err)
+	}
+	klog.InfoS("mirrored pod annotations to sandbox", "sandbox", klog.KObj(box), "keys", mirroredPodAnnotations)
+	return nil
 }
 
 func (r *SandboxReconciler) updateSandboxStatus(ctx context.Context, newStatus agentsv1alpha1.SandboxStatus, box *agentsv1alpha1.Sandbox) error {

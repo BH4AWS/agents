@@ -257,7 +257,7 @@ func TestInitRuntime(t *testing.T) {
 				return newTestSandboxWithURL(url)
 			},
 			wantErr:     true,
-			errContains: "not 2xx",
+			errContains: "returned status 401",
 		},
 		{
 			name:    "empty runtime URL returns error",
@@ -269,7 +269,7 @@ func TestInitRuntime(t *testing.T) {
 				}
 			},
 			wantErr:     true,
-			errContains: "runtimeURL is empty",
+			errContains: "runtime url not found on sandbox",
 		},
 		{
 			name: "SkipRefresh false with refreshFn updates sandbox",
@@ -325,7 +325,7 @@ func TestInitRuntime(t *testing.T) {
 				return newTestSandboxWithURL(url)
 			},
 			wantErr:     true,
-			errContains: "not 2xx",
+			errContains: "returned status 500",
 		},
 	}
 

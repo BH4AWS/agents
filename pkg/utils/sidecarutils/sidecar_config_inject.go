@@ -165,6 +165,30 @@ func setAgentRuntimeContainer(ctx context.Context, podSpec *corev1.PodSpec, conf
 }
 
 func applyInjectionTemplate(pod *corev1.Pod, config SidecarInjectConfig) {
+	applyInjectionMetadata(pod, config)
+
+	for _, ic := range config.InitContainers {
+		pod.Spec.InitContainers = append(pod.Spec.InitContainers, ic)
+	}
+
+	for _, c := range config.Containers {
+		pod.Spec.Containers = append(pod.Spec.Containers, c)
+	}
+
+	for _, v := range config.Volumes {
+		pod.Spec.Volumes = append(pod.Spec.Volumes, v)
+	}
+}
+
+// applyInjectionMetadata applies only the Labels and Annotations declared by an
+// injection template to the pod, without touching containers or volumes. It is
+// shared by the generic injection path (applyInjectionTemplate) and the
+// built-in runtime path (agent-runtime / csi-mount), whose containers and
+// volumes are wired by the dedicated set*Container functions. This lets a
+// built-in template advertise pod-level facts (e.g. the runtime TLS port
+// annotation) that stay consistent with the injected sidecar by construction.
+// User-defined values are never overridden.
+func applyInjectionMetadata(pod *corev1.Pod, config SidecarInjectConfig) {
 	if pod.Labels == nil {
 		pod.Labels = make(map[string]string)
 	}
@@ -183,18 +207,6 @@ func applyInjectionTemplate(pod *corev1.Pod, config SidecarInjectConfig) {
 		if _, exists := pod.Annotations[k]; !exists {
 			pod.Annotations[k] = v
 		}
-	}
-
-	for _, ic := range config.InitContainers {
-		pod.Spec.InitContainers = append(pod.Spec.InitContainers, ic)
-	}
-
-	for _, c := range config.Containers {
-		pod.Spec.Containers = append(pod.Spec.Containers, c)
-	}
-
-	for _, v := range config.Volumes {
-		pod.Spec.Volumes = append(pod.Spec.Volumes, v)
 	}
 }
 

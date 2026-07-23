@@ -623,6 +623,7 @@ func TestDoSidecarInjection(t *testing.T) {
 		expectCSIContainer     bool
 		expectMainEnvCount     int
 		expectCSIVolumeCount   int
+		expectPodAnnotations   map[string]string // expected pod annotations after injection (subset match)
 	}{
 		{
 			name: "runtime injection only",
@@ -1110,6 +1111,69 @@ func TestDoSidecarInjection(t *testing.T) {
 			expectMainEnvCount:     0,
 			expectCSIVolumeCount:   0,
 		},
+		{
+			name: "runtime injection applies template annotations to pod",
+			sandbox: &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-sandbox", Namespace: "default"},
+				Spec: agentsv1alpha1.SandboxSpec{
+					Runtimes: []agentsv1alpha1.RuntimeConfig{
+						{Name: agentsv1alpha1.RuntimeConfigForInjectAgentRuntime},
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "main", Image: "nginx"}},
+				},
+			},
+			injectConfigMap: map[string]string{
+				KEY_RUNTIME_INJECTION_CONFIG: `{
+					"mainContainer": {"name": "", "env": [{"name": "RUNTIME_ENV", "value": "test"}], "volumeMounts": []},
+					"csiSidecar": [{"name": "runtime-sidecar", "image": "runtime:v1"}],
+					"volume": [],
+					"annotations": {"agents.kruise.io/runtime-tls-port": "49984"},
+					"labels": {"runtime-mode": "tls"}
+				}`,
+			},
+			expectRuntimeContainer: true,
+			expectMainEnvCount:     1,
+			expectPodAnnotations: map[string]string{
+				"agents.kruise.io/runtime-tls-port": "49984",
+			},
+		},
+		{
+			name: "runtime injection does not override user-defined pod annotation",
+			sandbox: &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-sandbox", Namespace: "default"},
+				Spec: agentsv1alpha1.SandboxSpec{
+					Runtimes: []agentsv1alpha1.RuntimeConfig{
+						{Name: agentsv1alpha1.RuntimeConfigForInjectAgentRuntime},
+					},
+				},
+			},
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"agents.kruise.io/runtime-tls-port": "12345",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "main", Image: "nginx"}},
+				},
+			},
+			injectConfigMap: map[string]string{
+				KEY_RUNTIME_INJECTION_CONFIG: `{
+					"mainContainer": {"name": "", "env": [], "volumeMounts": []},
+					"csiSidecar": [{"name": "runtime-sidecar", "image": "runtime:v1"}],
+					"volume": [],
+					"annotations": {"agents.kruise.io/runtime-tls-port": "49984"}
+				}`,
+			},
+			expectRuntimeContainer: true,
+			expectPodAnnotations: map[string]string{
+				"agents.kruise.io/runtime-tls-port": "12345", // user-defined value wins
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1178,6 +1242,12 @@ func TestDoSidecarInjection(t *testing.T) {
 			}
 			if !mainContainerFound {
 				t.Error("expected main container to still exist")
+			}
+			// Verify template-declared pod annotations landed (subset match)
+			for k, v := range tt.expectPodAnnotations {
+				if got := tt.pod.Annotations[k]; got != v {
+					t.Errorf("expected pod annotation %q=%q, got %q", k, v, got)
+				}
 			}
 		})
 	}

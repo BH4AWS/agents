@@ -87,10 +87,15 @@ func doSidecarInjection(ctx context.Context, sandbox *agentsv1alpha1.Sandbox, po
 		case agentsv1alpha1.RuntimeConfigForInjectAgentRuntime:
 			if !isContainersExists(pod.Spec.InitContainers, runtimeInjectConfig.Sidecars) && !isContainersExists(pod.Spec.Containers, runtimeInjectConfig.Sidecars) {
 				setAgentRuntimeContainer(ctx, &pod.Spec, runtimeInjectConfig)
+				// Apply the template-declared pod metadata (e.g. the runtime TLS
+				// port annotation) alongside the sidecar so pod-level capability
+				// facts always match the actually injected container.
+				applyInjectionMetadata(pod, runtimeInjectConfig)
 			}
 		case agentsv1alpha1.RuntimeConfigForInjectCsiMount:
 			if !isContainersExists(pod.Spec.InitContainers, runtimeInjectConfig.Sidecars) && !isContainersExists(pod.Spec.Containers, runtimeInjectConfig.Sidecars) {
 				setCSIMountContainer(ctx, &pod.Spec, runtimeInjectConfig)
+				applyInjectionMetadata(pod, runtimeInjectConfig)
 			}
 		}
 	}
