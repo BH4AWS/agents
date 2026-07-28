@@ -53,6 +53,7 @@ import (
 	"github.com/openkruise/agents/pkg/utils"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
 	"github.com/openkruise/agents/pkg/utils/fieldindex"
+	agentsruntime "github.com/openkruise/agents/pkg/utils/runtime"
 	"github.com/openkruise/agents/pkg/utils/webhookutils"
 	customwebhook "github.com/openkruise/agents/pkg/webhook"
 	"github.com/openkruise/agents/pkg/webhook/sandboxset/mutating"
@@ -122,6 +123,14 @@ func main() {
 		"supporting three states: ip, memory, and filesystem. Format: comma-separated, e.g.: memory,filesystem")
 	flag.StringVar(&metricLabelsAllowlist, "metric-labels-allowlist", "",
 		"Comma-separated list of Sandbox label keys to expose as sandbox_labels metric labels (e.g., app,env,version)")
+
+	var runtimeClientCertDir string
+	flag.StringVar(&runtimeClientCertDir, "runtime-client-cert-dir", "",
+		"Directory holding the agent-runtime client TLS material (ca.crt, client.crt, client.key), "+
+			"typically the mount point of the runtime client certificate Secret. "+
+			"Empty disables runtime TLS: every sandbox is reached over the legacy plaintext paths. "+
+			"When set, the material must be loadable at startup, and sandboxes advertising the "+
+			"runtime TLS capability are served over HTTPS with mutual TLS.")
 
 	var metricsAsyncWorkers int
 	var metricsAsyncQueueCap int
@@ -307,10 +316,31 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Resolve the runtime client TLS material provider. A configured directory
+	// must be loadable now (fail fast on a broken mount); the provider re-reads
+	// the files on every use so Secret rotation is picked up without restarts.
+	var runtimeTLSMaterial agentsruntime.TLSMaterialProvider
+	if runtimeClientCertDir != "" {
+		if _, err := agentsruntime.LoadTLSMaterialFromDir(runtimeClientCertDir); err != nil {
+			setupLog.Error(err, "unable to load runtime client TLS material", "dir", runtimeClientCertDir)
+			os.Exit(1)
+		}
+		certDir := runtimeClientCertDir
+		runtimeTLSMaterial = func() (*agentsruntime.TLSMaterial, error) {
+			return agentsruntime.LoadTLSMaterialFromDir(certDir)
+		}
+		setupLog.Info("runtime client TLS enabled", "certDir", certDir)
+	} else {
+		setupLog.Info("runtime client TLS disabled, using legacy plaintext runtime paths")
+	}
+
 	setupLog.Info("setup controllers",
 		"metricsAsyncWorkers", metricsAsyncWorkers,
 		"metricsAsyncQueueCap", metricsAsyncQueueCap)
-	if err = controller.SetupWithManager(mgr, controller.Deps{MetricsCleanup: metricsGC}); err != nil {
+	if err = controller.SetupWithManager(mgr, controller.Deps{
+		MetricsCleanup:     metricsGC,
+		RuntimeTLSMaterial: runtimeTLSMaterial,
+	}); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
 	}

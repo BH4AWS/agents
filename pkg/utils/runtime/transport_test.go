@@ -15,12 +15,21 @@ package runtime
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -148,7 +157,7 @@ func TestTransportOptionsFor(t *testing.T) {
 	}{
 		{name: "nil sandbox", sbx: nil, material: material},
 		{name: "no annotation stays HTTP", sbx: sandboxWithPodIP("10.0.0.1"), material: material},
-		{name: "annotation without material stays HTTP", sbx: sandboxWithTLSPort("49984"), material: nil},
+		{name: "annotation without material is an error", sbx: sandboxWithTLSPort("49984"), material: nil, wantErr: true},
 		{name: "annotation with material enables TLS", sbx: sandboxWithTLSPort("49984"), material: material, wantTLS: true, wantTLSPort: 49984},
 		{name: "annotation with custom port", sbx: sandboxWithTLSPort("50000"), material: material, wantTLS: true, wantTLSPort: 50000},
 		{name: "non-numeric annotation is an error", sbx: sandboxWithTLSPort("not-a-port"), material: material, wantErr: true},
@@ -173,6 +182,113 @@ func TestTransportOptionsFor(t *testing.T) {
 			require.True(t, ok)
 			assert.True(t, rc.tlsEnabled)
 			assert.Equal(t, tt.wantTLSPort, rc.tlsPort)
+		})
+	}
+}
+
+// genSelfSignedPEM produces a throwaway self-signed certificate/key pair used
+// as client certificate material in loader tests.
+func genSelfSignedPEM(t *testing.T) (certPEM, keyPEM []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test-client"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	require.NoError(t, err)
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	return certPEM, keyPEM
+}
+
+// TestLoadTLSMaterialFromDir covers the strict loader semantics: an empty dir
+// disables TLS, while a configured dir must yield fully valid material.
+func TestLoadTLSMaterialFromDir(t *testing.T) {
+	caPEM, _ := genSelfSignedPEM(t)
+	clientCert, clientKey := genSelfSignedPEM(t)
+
+	// writeDir materializes the given files into a fresh temp dir.
+	writeDir := func(t *testing.T, files map[string][]byte) string {
+		dir := t.TempDir()
+		for name, content := range files {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, name), content, 0o600))
+		}
+		return dir
+	}
+
+	tests := []struct {
+		name       string
+		dir        func(t *testing.T) string
+		wantNil    bool
+		wantErr    bool
+		wantClient bool
+	}{
+		{
+			name:    "empty dir disables TLS",
+			dir:     func(*testing.T) string { return "" },
+			wantNil: true,
+		},
+		{
+			name:    "missing directory is an error",
+			dir:     func(*testing.T) string { return "/nonexistent/certs" },
+			wantErr: true,
+		},
+		{
+			name: "ca only yields server-authenticated material",
+			dir: func(t *testing.T) string {
+				return writeDir(t, map[string][]byte{"ca.crt": caPEM})
+			},
+		},
+		{
+			name: "full set yields mutual TLS material",
+			dir: func(t *testing.T) string {
+				return writeDir(t, map[string][]byte{"ca.crt": caPEM, "client.crt": clientCert, "client.key": clientKey})
+			},
+			wantClient: true,
+		},
+		{
+			name: "client cert without key is an error",
+			dir: func(t *testing.T) string {
+				return writeDir(t, map[string][]byte{"ca.crt": caPEM, "client.crt": clientCert})
+			},
+			wantErr: true,
+		},
+		{
+			name: "unparsable ca is an error",
+			dir: func(t *testing.T) string {
+				return writeDir(t, map[string][]byte{"ca.crt": []byte("not a pem")})
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, err := LoadTLSMaterialFromDir(tt.dir(t))
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Nil(t, m)
+				return
+			}
+			require.NoError(t, err)
+			if tt.wantNil {
+				assert.Nil(t, m)
+				return
+			}
+			require.NotNil(t, m)
+			assert.NotEmpty(t, m.CABundle)
+			if tt.wantClient {
+				assert.NotEmpty(t, m.ClientCertPEM)
+				assert.NotEmpty(t, m.ClientKeyPEM)
+			} else {
+				assert.Empty(t, m.ClientCertPEM)
+				assert.Empty(t, m.ClientKeyPEM)
+			}
 		})
 	}
 }

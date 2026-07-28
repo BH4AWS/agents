@@ -76,6 +76,7 @@ func NewCommonControl(args SandboxControlArgs) SandboxControl {
 		apiReader:       args.APIReader,
 		storageRegistry: storages.NewStorageProvider(),
 		recorder:        args.Recorder,
+		tlsMaterial:     args.RuntimeTLSMaterial,
 	}
 	control := &commonControl{
 		Client:               args.Client,

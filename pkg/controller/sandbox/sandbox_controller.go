@@ -47,6 +47,7 @@ import (
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/expectations"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
+	utilruntime "github.com/openkruise/agents/pkg/utils/runtime"
 	timeoututils "github.com/openkruise/agents/pkg/utils/timeout"
 )
 
@@ -109,7 +110,10 @@ type Enqueuer interface {
 	Enqueue(namespace, name string)
 }
 
-func Add(mgr manager.Manager, metricsCleanup Enqueuer) error {
+// Add registers the sandbox controller. runtimeTLSMaterial supplies client TLS
+// material for reaching TLS-capable agent-runtimes; nil disables runtime TLS
+// for this controller (all sandboxes are served over the legacy paths).
+func Add(mgr manager.Manager, metricsCleanup Enqueuer, runtimeTLSMaterial utilruntime.TLSMaterialProvider) error {
 	if !utilfeature.DefaultFeatureGate.Enabled(features.SandboxGate) || !discovery.DiscoverGVK(sandboxControllerKind) {
 		return nil
 	}
@@ -127,12 +131,13 @@ func Add(mgr manager.Manager, metricsCleanup Enqueuer) error {
 		Scheme:            mgr.GetScheme(),
 		checkpointControl: checkpointControl,
 		controls: core.NewSandboxControl(core.SandboxControlArgs{
-			Client:            mgr.GetClient(),
-			APIReader:         mgr.GetAPIReader(),
-			Recorder:          recorder,
-			RateLimiter:       rateLimiter,
-			CheckpointControl: checkpointControl,
-			PodControl:        podControl,
+			Client:             mgr.GetClient(),
+			APIReader:          mgr.GetAPIReader(),
+			Recorder:           recorder,
+			RateLimiter:        rateLimiter,
+			CheckpointControl:  checkpointControl,
+			PodControl:         podControl,
+			RuntimeTLSMaterial: runtimeTLSMaterial,
 			RecycleConfig: core.SandboxRecycleConfig{
 				Timeout:                recycleTimeout,
 				GracePeriod:            recycleGracePeriod,

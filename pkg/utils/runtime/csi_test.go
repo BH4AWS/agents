@@ -15,6 +15,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -654,6 +655,69 @@ func TestDoCSIMount(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.True(t, duration > 0, "duration should be positive, got %v", duration)
+		})
+	}
+}
+
+// TestDoCSIMount_TransportDispatch verifies the storage-API side of the two
+// coexisting mount transports: non-empty rtOpts route the mount through the
+// runtime storage API (POST /v1/storage/mounts) instead of the legacy CLI,
+// with MountConfig mapping 1:1 onto CreateMountRequest. The legacy path
+// (empty rtOpts) is covered by TestDoCSIMount above.
+func TestDoCSIMount_TransportDispatch(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		resp    CreateMountResponse
+		wantErr bool
+	}{
+		{
+			name:   "storage API success",
+			status: http.StatusOK,
+			resp:   CreateMountResponse{Success: true, MountPath: "/m", LinkPath: "/l"},
+		},
+		{
+			name:    "storage API reports mount failure",
+			status:  http.StatusOK,
+			resp:    CreateMountResponse{Success: false, Message: "denied"},
+			wantErr: true,
+		},
+		{
+			name:    "storage API server error",
+			status:  http.StatusInternalServerError,
+			resp:    CreateMountResponse{},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotReq CreateMountRequest
+			var hits atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				require.Equal(t, http.MethodPost, r.Method)
+				require.Equal(t, "/v1/storage/mounts", r.URL.Path)
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&gotReq))
+				writeMountResponse(t, w, tt.status, tt.resp)
+			}))
+			defer server.Close()
+
+			sbx := &agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{Name: "dispatch-sbx", Namespace: "default"}}
+			opt := config.MountConfig{Driver: "ossplugin.csi.alibabacloud.com", RequestRaw: "base64-csi-config"}
+
+			// Non-empty rtOpts select the storage API path; WithBaseURL keeps the
+			// test on plain HTTP while exercising exactly the dispatch branch the
+			// TLS options would take in production.
+			_, err := doCSIMount(context.Background(), sbx, opt,
+				WithBaseURL(server.URL), WithRetry(fastBackoff))
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.GreaterOrEqual(t, hits.Load(), int32(1))
+			assert.Equal(t, opt.Driver, gotReq.Driver)
+			assert.Equal(t, opt.RequestRaw, gotReq.Config)
 		})
 	}
 }

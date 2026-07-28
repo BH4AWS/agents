@@ -28,6 +28,7 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/utils/expectations"
 	"github.com/openkruise/agents/pkg/utils/inplaceupdate"
+	utilruntime "github.com/openkruise/agents/pkg/utils/runtime"
 )
 
 var (
@@ -117,6 +118,11 @@ type SandboxControlArgs struct {
 	CheckpointControl *CheckpointControl
 	PodControl        *PodControl
 	RecycleConfig     SandboxRecycleConfig
+	// RuntimeTLSMaterial supplies client TLS material for reaching TLS-capable
+	// agent-runtimes (sandboxes advertising AnnotationRuntimeTLSPort). Nil means
+	// this controller is not configured for runtime TLS and every sandbox is
+	// served over the legacy plaintext paths.
+	RuntimeTLSMaterial utilruntime.TLSMaterialProvider
 }
 
 func NewSandboxControl(args SandboxControlArgs) map[string]SandboxControl {

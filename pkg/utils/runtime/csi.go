@@ -83,7 +83,14 @@ func CSIMount(ctx context.Context, sbx *agentsv1alpha1.Sandbox, driver string, r
 // It uses opts.Concurrency to limit the number of concurrent mount goroutines.
 // If Concurrency is 0 or negative, it defaults to config.DefaultCSIMountConcurrency.
 // Returns the total duration spent on all mount operations and all encountered errors (joined via errors.Join).
-func ProcessCSIMounts(ctx context.Context, sbx *agentsv1alpha1.Sandbox, opts config.CSIMountOptions) (time.Duration, error) {
+//
+// rtOpts selects the mount transport per sandbox: when non-empty (typically the
+// TLS options resolved by TransportOptionsFor for a sandbox advertising
+// AnnotationRuntimeTLSPort), every mount goes through the runtime storage API
+// (POST /v1/storage/mounts over HTTPS with forced resolution). When empty, the
+// legacy sandbox-storage CLI path over the envd process protocol is used, so
+// pre-TLS sandboxes keep their existing behavior untouched.
+func ProcessCSIMounts(ctx context.Context, sbx *agentsv1alpha1.Sandbox, opts config.CSIMountOptions, rtOpts ...Option) (time.Duration, error) {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbx))
 	start := time.Now()
 
@@ -103,7 +110,7 @@ func ProcessCSIMounts(ctx context.Context, sbx *agentsv1alpha1.Sandbox, opts con
 		go func(opt config.MountConfig) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			mountDuration, err := doCSIMount(ctx, sbx, opt)
+			mountDuration, err := doCSIMount(ctx, sbx, opt, rtOpts...)
 			if err != nil {
 				log.Error(err, "failed to perform CSI mount", "mountOptionConfig", opt)
 				errCh <- err
@@ -125,9 +132,25 @@ func ProcessCSIMounts(ctx context.Context, sbx *agentsv1alpha1.Sandbox, opts con
 	return time.Since(start), errors.Join(errs...)
 }
 
-func doCSIMount(ctx context.Context, sbx *agentsv1alpha1.Sandbox, opts config.MountConfig) (time.Duration, error) {
+// doCSIMount performs a single CSI mount, dispatching between the two coexisting
+// transports: the runtime storage API (HTTPS, when rtOpts carries the TLS options
+// for a TLS-capable sandbox) and the legacy sandbox-storage CLI (plaintext envd
+// process protocol) for everything else. The dispatch key is intentionally just
+// "rtOpts non-empty": TransportOptionsFor is the single oracle deciding whether a
+// sandbox is served over TLS, so this function stays free of annotation parsing.
+func doCSIMount(ctx context.Context, sbx *agentsv1alpha1.Sandbox, opts config.MountConfig, rtOpts ...Option) (time.Duration, error) {
 	ctx = logs.Extend(ctx, "action", "csiMount")
 	start := time.Now()
+	if len(rtOpts) > 0 {
+		// New path: runtime storage API. MountConfig.RequestRaw carries the same
+		// base64 CSI payload the CLI would receive, so it maps 1:1 onto
+		// CreateMountRequest.Config.
+		_, err := NewRuntime(sbx, rtOpts...).Storage().Mount(ctx, CreateMountRequest{
+			Driver: opts.Driver,
+			Config: opts.RequestRaw,
+		})
+		return time.Since(start), err
+	}
 	err := CSIMount(ctx, sbx, opts.Driver, opts.RequestRaw)
 	return time.Since(start), err
 }

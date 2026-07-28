@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -43,6 +45,13 @@ const (
 
 	// pinnedDialTimeout bounds a single TCP dial to the sandbox Pod IP.
 	pinnedDialTimeout = 5 * time.Second
+
+	// Well-known file names inside a runtime client certificate directory, as
+	// laid out by the client certificate Secret mounted into control-plane
+	// components (see LoadTLSMaterialFromDir).
+	clientCADataKey   = "ca.crt"
+	clientCertDataKey = "client.crt"
+	clientKeyDataKey  = "client.key"
 )
 
 // TLSMaterial carries the client-side certificate material used to speak
@@ -94,21 +103,74 @@ func buildClientTLSConfig(m TLSMaterial, serverName string) (*tls.Config, error)
 	return cfg, nil
 }
 
+// TLSMaterialProvider supplies the client TLS material used to reach
+// TLS-capable agent-runtimes. Implementations typically wrap
+// LoadTLSMaterialFromDir so every invocation re-reads the mounted Secret files
+// and rotation is picked up without restarts. A nil provider (or a nil
+// material) means the process is not configured for TLS.
+type TLSMaterialProvider func() (*TLSMaterial, error)
+
+// LoadTLSMaterialFromDir reads the runtime client certificate material from
+// dir, the mount point of a client certificate Secret carrying ca.crt (required)
+// plus client.crt/client.key (optional, but only as a pair). It is the single
+// place that touches certificate files for runtime clients; both the sandbox
+// controller and the sandbox manager are expected to use it.
+//
+// Semantics are strict by design: an empty dir means TLS is not configured and
+// yields (nil, nil), while a non-empty dir declares the intent to speak TLS, so
+// any problem (missing directory, missing ca.crt, unparsable material, an
+// unpaired client certificate) is an error the caller should surface at
+// startup instead of silently degrading to plain HTTP.
+//
+// Callers should re-invoke it per client construction rather than caching the
+// result: Secret rotation updates the mounted files in place, so a fresh read
+// naturally picks up rotated certificates.
+func LoadTLSMaterialFromDir(dir string) (*TLSMaterial, error) {
+	if dir == "" {
+		return nil, nil
+	}
+	caBundle, err := os.ReadFile(filepath.Join(dir, clientCADataKey)) // #nosec G304 -- operator-configured certificate directory
+	if err != nil {
+		return nil, fmt.Errorf("failed to read runtime client CA bundle %s: %w", filepath.Join(dir, clientCADataKey), err)
+	}
+
+	certPEM, certErr := os.ReadFile(filepath.Join(dir, clientCertDataKey)) // #nosec G304 -- operator-configured certificate directory
+	keyPEM, keyErr := os.ReadFile(filepath.Join(dir, clientKeyDataKey))    // #nosec G304 -- operator-configured certificate directory
+	certMissing, keyMissing := os.IsNotExist(certErr), os.IsNotExist(keyErr)
+	switch {
+	case certMissing && keyMissing:
+		// Server-authenticated TLS only; the runtime server accepts it
+		// (VerifyClientCertIfGiven).
+		certPEM, keyPEM = nil, nil
+	case certErr != nil:
+		return nil, fmt.Errorf("failed to read runtime client certificate %s: %w", filepath.Join(dir, clientCertDataKey), certErr)
+	case keyErr != nil:
+		return nil, fmt.Errorf("failed to read runtime client key %s: %w", filepath.Join(dir, clientKeyDataKey), keyErr)
+	}
+
+	m := &TLSMaterial{CABundle: caBundle, ClientCertPEM: certPEM, ClientKeyPEM: keyPEM}
+	// Validate the material eagerly so a broken mount fails fast at startup
+	// instead of on the first runtime call.
+	if _, err := buildClientTLSConfig(*m, RuntimeServerSNI); err != nil {
+		return nil, fmt.Errorf("invalid runtime client TLS material in %s: %w", dir, err)
+	}
+	return m, nil
+}
+
 // TransportOptionsFor resolves the transport Options for sbx from its
 // advertised runtime capability, implementing the dual-switch decision:
 //
 //   - the sandbox carries no AnnotationRuntimeTLSPort -> nil options, plain
 //     HTTP (legacy sandboxes are untouched);
-//   - the annotation is present but the caller supplies no TLS material ->
-//     nil options, plain HTTP (the annotation declares a capability, not an
-//     obligation; per-process material config is the caller-side switch);
 //   - the annotation is present and material is supplied -> WithTLS +
-//     WithTLSPort, i.e. HTTPS with forced resolution to the sandbox Pod IP.
+//     WithTLSPort, i.e. HTTPS with forced resolution to the sandbox Pod IP;
+//   - the annotation is present but the caller supplies no TLS material ->
+//     error. A sandbox that declares the TLS capability must not be silently
+//     downgraded to plaintext by a caller that lacks certificates; surfacing
+//     the misconfiguration is preferred over a quiet fallback.
 //
-// An explicitly present but unparsable annotation is reported as an error
-// with nil options: it indicates a broken injection template, so callers
-// should surface it, and may still proceed over plain HTTP since the returned
-// options degrade to the legacy transport.
+// An explicitly present but unparsable annotation is likewise an error: it
+// indicates a broken injection template.
 func TransportOptionsFor(sbx *agentsv1alpha1.Sandbox, m *TLSMaterial) ([]Option, error) {
 	if sbx == nil {
 		return nil, nil
@@ -122,7 +184,8 @@ func TransportOptionsFor(sbx *agentsv1alpha1.Sandbox, m *TLSMaterial) ([]Option,
 		return nil, fmt.Errorf("invalid runtime TLS port annotation %q on sandbox %s/%s", raw, sbx.Namespace, sbx.Name)
 	}
 	if m == nil {
-		return nil, nil
+		return nil, fmt.Errorf("sandbox %s/%s advertises runtime TLS port %d but no client TLS material is configured",
+			sbx.Namespace, sbx.Name, port)
 	}
 	return []Option{WithTLS(*m), WithTLSPort(port)}, nil
 }

@@ -41,10 +41,14 @@ type defaultSandboxInitializer struct {
 	apiReader       client.Reader
 	storageRegistry storages.VolumeMountProviderRegistry
 	recorder        record.EventRecorder
+	// tlsMaterial supplies the client TLS material for TLS-capable sandboxes.
+	// Nil means the controller is not configured for runtime TLS.
+	tlsMaterial utilruntime.TLSMaterialProvider
 }
 
 func (d *defaultSandboxInitializer) Initialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *agentsv1alpha1.SandboxStatus) error {
-	if err := Initialize(ctx, box, newStatus, d.client, d.apiReader, d.storageRegistry); err != nil {
+	err := d.doInitialize(ctx, box, newStatus)
+	if err != nil {
 		klog.ErrorS(err, "post-resume/upgrade initialization failed", "sandbox", klog.KObj(box))
 		d.recorder.Event(box, corev1.EventTypeWarning, string(agentsv1alpha1.RuntimeInitialized),
 			fmt.Sprintf("Failed to perform initialization: %v", err))
@@ -69,6 +73,27 @@ func (d *defaultSandboxInitializer) Initialize(ctx context.Context, box *agentsv
 	return nil
 }
 
+// doInitialize resolves the per-sandbox mount transport and delegates to the
+// package-level Initialize. A sandbox advertising the runtime TLS capability
+// while this controller lacks TLS material (or carries a broken annotation) is
+// a hard failure by design: silently downgrading a TLS-capable sandbox to the
+// plaintext CLI path would be a security regression, so the misconfiguration
+// must surface instead.
+func (d *defaultSandboxInitializer) doInitialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *agentsv1alpha1.SandboxStatus) error {
+	var material *utilruntime.TLSMaterial
+	if d.tlsMaterial != nil {
+		var err error
+		if material, err = d.tlsMaterial(); err != nil {
+			return fmt.Errorf("failed to load runtime client TLS material: %w", err)
+		}
+	}
+	rtOpts, err := utilruntime.TransportOptionsFor(box, material)
+	if err != nil {
+		return fmt.Errorf("failed to resolve runtime transport: %w", err)
+	}
+	return Initialize(ctx, box, newStatus, d.client, d.apiReader, d.storageRegistry, rtOpts...)
+}
+
 // Initialize performs post-recreation initialization for a sandbox.
 // It sequentially executes:
 //  1. Re-init runtime (if initRuntimeRequest annotation is set)
@@ -76,8 +101,15 @@ func (d *defaultSandboxInitializer) Initialize(ctx context.Context, box *agentsv
 //
 // This is the unified initialization logic for all sandboxes after resume or recreate upgrade.
 // Both E2B and SandboxClaim paths rely on this to re-initialize runtime and CSI mounts.
+//
+// rtOpts selects the CSI mount transport for this sandbox (see
+// ProcessCSIMounts): non-empty means the runtime storage API over HTTPS,
+// empty keeps the legacy CLI path. The /init handshake below intentionally
+// stays on its existing transport for now; only the mount interface is
+// TLS-enabled in this phase.
 func Initialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *agentsv1alpha1.SandboxStatus,
-	client client.Client, apiReader client.Reader, storageRegistry storages.VolumeMountProviderRegistry) error {
+	client client.Client, apiReader client.Reader, storageRegistry storages.VolumeMountProviderRegistry,
+	rtOpts ...utilruntime.Option) error {
 	if client == nil || apiReader == nil {
 		return nil
 	}
@@ -130,7 +162,7 @@ func Initialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *age
 		// Cleanup ProcessCSIMounts for concurrent mount execution
 		duration, mountErr := utilruntime.ProcessCSIMounts(ctx, sbxForInit, config.CSIMountOptions{
 			MountOptionList: mountOptionList,
-		})
+		}, rtOpts...)
 		if mountErr != nil {
 			return fmt.Errorf("failed to perform ReCSIMount after resume: %w", mountErr)
 		}
