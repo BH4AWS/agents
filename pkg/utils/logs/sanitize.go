@@ -16,7 +16,10 @@ limitations under the License.
 
 package logs
 
-import "strings"
+import (
+	"math"
+	"strings"
+)
 
 // SanitizeValue removes line delimiters before a value is written to a log.
 func SanitizeValue(s string) string {
@@ -27,6 +30,10 @@ func SanitizeValue(s string) string {
 
 // BoundedTextCapture keeps bounded excerpts from both ends of streamed text.
 // It is intended for diagnostic output whose complete value may be unbounded.
+//
+// A BoundedTextCapture is not safe for concurrent use: Append and Summary
+// mutate and read shared state without synchronization, so a single capture
+// must be driven from one goroutine (or externally guarded by the caller).
 type BoundedTextCapture struct {
 	edgeBytes     int
 	edgeWords     int
@@ -80,8 +87,8 @@ func (c *BoundedTextCapture) Summary() string {
 		return summarizeText(string(c.completeOutput()), c.edgeWords)
 	}
 
-	headText := edgeWords(string(c.head), c.edgeWords, true)
-	tailText := edgeWords(string(c.tail), c.edgeWords, false)
+	headText := takeEdgeWords(string(c.head), c.edgeWords, true)
+	tailText := takeEdgeWords(string(c.tail), c.edgeWords, false)
 	return joinSummaryEdges(headText, tailText)
 }
 
@@ -95,7 +102,7 @@ func (c *BoundedTextCapture) completeOutput() []byte {
 	return append(output, c.tail[overlap:]...)
 }
 
-const maxCapturedTextBytes = int64(^uint64(0) >> 1)
+const maxCapturedTextBytes = math.MaxInt64
 
 func appendBoundedTail(tail, data []byte, limit int) []byte {
 	if limit <= 0 {
@@ -126,7 +133,7 @@ func summarizeText(text string, edgeWordCount int) string {
 		strings.Join(words[len(words)-edgeWordCount:], " ")
 }
 
-func edgeWords(text string, limit int, head bool) string {
+func takeEdgeWords(text string, limit int, head bool) string {
 	words := strings.Fields(strings.ToValidUTF8(text, ""))
 	if len(words) > limit {
 		if head {
