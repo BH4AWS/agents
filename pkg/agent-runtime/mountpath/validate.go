@@ -116,9 +116,11 @@ func resolveDestination(pathValue string) (string, bool, error) {
 
 // resolveExistingPrefix follows every symlink in the existing portion of an
 // absolute path. Missing trailing components are appended unchanged so callers
-// can validate paths whose parents will be created later. The bool reports
-// whether any symlink target traversed procfs, including magic-link forms such
-// as /proc/self/root that may resolve to a final path outside /proc.
+// can validate paths whose parents will be created later. filepath.EvalSymlinks
+// cannot handle those missing components, and its final path alone cannot show
+// whether resolution passed through procfs (for example, /proc/self/root may
+// resolve outside /proc). The bool reports whether any symlink target traversed
+// procfs.
 func resolveExistingPrefix(pathValue string) (string, bool, error) {
 	pending := splitPathComponents(filepath.Clean(pathValue))
 	resolved := string(filepath.Separator)
