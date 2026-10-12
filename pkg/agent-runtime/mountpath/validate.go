@@ -45,9 +45,29 @@ var standardExecutableDirs = []string{
 	"/usr/local/sbin",
 }
 
-// Validate rejects a user-visible mount path that can replace procfs or a
-// directory used for executable lookup. pathEnv must come from the process that
-// runs in the target container, never from the request being validated.
+// protectedSystemDirs contains root-owned paths that must not be shadowed by a
+// user-visible mount. Keep the CSI runtime paths and mount root reserved here.
+var protectedSystemDirs = []string{
+	"/mnt/envd",
+	"/run/csi", // Includes the CSI sockets and the default mount-root.
+	"/var/run/csi",
+	"/etc",
+	"/lib",
+	"/lib64",
+	"/usr/lib",
+	"/usr/lib64",
+	"/dev",
+	"/sys",
+	"/root",
+	"/home",
+	"/boot",
+	"/var/run",
+}
+
+// Validate rejects a user-visible mount path that overlaps a protected system
+// path or a directory used for executable lookup. pathEnv must come from the
+// process that runs in the target container, never from the request being
+// validated.
 func Validate(pathValue, pathEnv string) error {
 	if pathValue == "" {
 		return unsafePathError(pathValue, "path must not be empty")
@@ -80,13 +100,13 @@ func Validate(pathValue, pathEnv string) error {
 		return unsafePathError(pathValue, "path resolves through /proc")
 	}
 
-	protectedDirs, err := executableDirs(pathEnv)
+	protectedDirs, err := protectedDirectories(pathEnv)
 	if err != nil {
-		return fmt.Errorf("failed to resolve executable directories: %w", err)
+		return fmt.Errorf("failed to resolve protected directories: %w", err)
 	}
 	for _, protectedDir := range protectedDirs {
 		if pathsOverlap(cleanPath, protectedDir) || pathsOverlap(resolvedPath, protectedDir) {
-			return unsafePathError(pathValue, fmt.Sprintf("path overlaps executable directory %q", protectedDir))
+			return unsafePathError(pathValue, fmt.Sprintf("path overlaps protected directory %q", protectedDir))
 		}
 	}
 	return nil
@@ -179,8 +199,9 @@ func resolveExistingPrefix(pathValue string) (string, bool, error) {
 	return resolved, traversedProc, nil
 }
 
-func executableDirs(pathEnv string) ([]string, error) {
+func protectedDirectories(pathEnv string) ([]string, error) {
 	entries := append([]string(nil), standardExecutableDirs...)
+	entries = append(entries, protectedSystemDirs...)
 	entries = append(entries, filepath.SplitList(pathEnv)...)
 
 	cwd, err := os.Getwd()
