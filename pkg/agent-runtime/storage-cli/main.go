@@ -78,7 +78,7 @@ var symlinkCmd = &cobra.Command{
 	Use:   "symlink",
 	Short: "Create a user-visible symlink to a CSI mount",
 	RunE: func(_ *cobra.Command, _ []string) error {
-		return runSymlink(symlinkTargetPath, symlinkLinkPath)
+		return link.CreateSymlink(symlinkTargetPath, symlinkLinkPath)
 	},
 }
 
@@ -88,10 +88,6 @@ var validateMountPathCmd = &cobra.Command{
 	RunE: func(_ *cobra.Command, _ []string) error {
 		return runValidateMountPath(mountPathToValidate)
 	},
-}
-
-func runSymlink(targetPath, linkPath string) error {
-	return link.CreateSymlink(targetPath, linkPath)
 }
 
 func runValidateMountPath(pathValue string) error {

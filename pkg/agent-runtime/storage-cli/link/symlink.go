@@ -37,13 +37,13 @@ func CreateSymlink(target, link string) error {
 	// Normalize link path: remove trailing slash if present
 	link = strings.TrimRight(link, "/")
 
-	// Reject unsafe paths before any filesystem operation.
+	// Reject unsafe paths before any filesystem operation. target is the internal
+	// CSI mount path inside a protected directory, so it only gets lexical checks.
 	if err := pathutils.ValidateSafePath(target); err != nil {
 		return fmt.Errorf("invalid target path: %w", err)
 	}
-	if err := pathutils.ValidateSafePath(link); err != nil {
-		return fmt.Errorf("invalid link path: %w", err)
-	}
+	// mountpath.Validate subsumes ValidateSafePath's empty and ".." checks, so
+	// link rejections share the mount command's ErrUnsafeMountPath class.
 	if err := mountpath.Validate(link, os.Getenv("PATH")); err != nil {
 		return err
 	}

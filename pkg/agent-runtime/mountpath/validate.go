@@ -31,6 +31,11 @@ import (
 // cannot change.
 var ErrUnsafeMountPath = errors.New("unsafe mount path")
 
+// ErrMountPathUnverifiable marks a failure to evaluate the policy against the
+// local filesystem. The requested path may be safe, but the sandbox environment
+// prevented a decision, so the mount is refused.
+var ErrMountPathUnverifiable = errors.New("mount path could not be verified")
+
 // UnsafePathExitCode is emitted by sandbox-runtime-storage when a command is
 // rejected by this policy. It lets callers classify the result without parsing
 // stderr that may contain user-controlled paths.
@@ -100,14 +105,16 @@ func Validate(pathValue, pathEnv string) error {
 		return unsafePathError(pathValue, "path resolves through /proc")
 	}
 
-	protectedDirs, err := protectedDirectories(pathEnv)
-	if err != nil {
-		return fmt.Errorf("failed to resolve protected directories: %w", err)
-	}
+	protectedDirs, resolveErr := protectedDirectories(pathEnv)
 	for _, protectedDir := range protectedDirs {
 		if pathsOverlap(cleanPath, protectedDir) || pathsOverlap(resolvedPath, protectedDir) {
 			return unsafePathError(pathValue, fmt.Sprintf("path overlaps protected directory %q", protectedDir))
 		}
+	}
+	if resolveErr != nil {
+		// Do not retain ErrUnsafeMountPath from the shared path resolver here.
+		// A protected directory belongs to the sandbox environment, not the request.
+		return fmt.Errorf("%w: failed to resolve protected directories: %v", ErrMountPathUnverifiable, resolveErr)
 	}
 	return nil
 }
@@ -204,10 +211,7 @@ func protectedDirectories(pathEnv string) ([]string, error) {
 	entries = append(entries, protectedSystemDirs...)
 	entries = append(entries, filepath.SplitList(pathEnv)...)
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
+	cwd, cwdErr := os.Getwd()
 
 	seen := make(map[string]struct{}, len(entries)*2)
 	protected := make([]string, 0, len(entries)*2)
@@ -219,12 +223,25 @@ func protectedDirectories(pathEnv string) ([]string, error) {
 		seen[pathValue] = struct{}{}
 		protected = append(protected, pathValue)
 	}
+	var firstResolveErr error
+	recordResolveErr := func(err error) {
+		if firstResolveErr == nil {
+			firstResolveErr = err
+		}
+	}
 
 	for _, entry := range entries {
-		if entry == "" {
-			entry = cwd
-		} else if !filepath.IsAbs(entry) {
-			entry = filepath.Join(cwd, entry)
+		originalEntry := entry
+		if entry == "" || !filepath.IsAbs(entry) {
+			if cwdErr != nil {
+				recordResolveErr(fmt.Errorf("resolve relative protected directory %q: %w", originalEntry, cwdErr))
+				continue
+			}
+			if entry == "" {
+				entry = cwd
+			} else {
+				entry = filepath.Join(cwd, entry)
+			}
 		}
 		entry = filepath.Clean(entry)
 		// Protecting the filesystem root would overlap every absolute mount path.
@@ -236,15 +253,16 @@ func protectedDirectories(pathEnv string) ([]string, error) {
 
 		resolved, _, resolveErr := resolveExistingPrefix(entry)
 		if resolveErr != nil {
-			// Fail closed: skipping an unresolved entry could omit an executable
-			// directory that is reachable through a symlink.
-			return nil, fmt.Errorf("resolve PATH entry %q: %w", entry, resolveErr)
+			// Fail closed, but retain the lexical entry and continue so a known
+			// request violation takes precedence over an unrelated environment error.
+			recordResolveErr(fmt.Errorf("resolve protected directory %q: %w", entry, resolveErr))
+			continue
 		}
 		if resolved != string(filepath.Separator) {
 			add(resolved)
 		}
 	}
-	return protected, nil
+	return protected, firstResolveErr
 }
 
 func splitPathComponents(pathValue string) []string {
@@ -266,7 +284,7 @@ func isWithin(pathValue, root string) bool {
 	if err != nil {
 		return false
 	}
-	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 func unsafePathError(pathValue, reason string) error {

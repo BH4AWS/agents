@@ -153,6 +153,7 @@ func TestCommandExitCode(t *testing.T) {
 		want int
 	}{
 		{name: "generic failure", err: errors.New("boom"), want: 1},
+		{name: "unverifiable mount path", err: fmt.Errorf("validation failed: %w", mountpath.ErrMountPathUnverifiable), want: 1},
 		{name: "unsafe mount path", err: fmt.Errorf("validation failed: %w", mountpath.ErrUnsafeMountPath), want: mountpath.UnsafePathExitCode},
 	}
 	for _, tt := range tests {

@@ -101,6 +101,7 @@ func TestValidate(t *testing.T) {
 		{name: "proc sibling prefix", path: "/proc-safe/data", pathEnv: customBin},
 		{name: "standard executable directory", path: "/usr/local/sbin", pathEnv: customBin, wantError: true},
 		{name: "below standard executable directory", path: "/usr/local/sbin/extensions", pathEnv: customBin, wantError: true},
+		{name: "dot-dot-prefixed child of standard executable directory", path: "/usr/local/sbin/..hidden", pathEnv: customBin, wantError: true},
 		{name: "ancestor of standard executable directory", path: "/usr/local", pathEnv: customBin, wantError: true},
 		{name: "standard directory sibling prefix", path: "/usr/bin-safe", pathEnv: customBin},
 		{name: "custom PATH directory", path: customBin, pathEnv: customBin, wantError: true},
@@ -144,11 +145,74 @@ func TestResolveExistingPrefixRejectsSymlinkLoop(t *testing.T) {
 	if !strings.Contains(err.Error(), "too many symbolic links") {
 		t.Fatalf("resolveExistingPrefix(%q) error = %v, want symbolic link limit reason", first, err)
 	}
+}
 
-	safeTarget := filepath.Join(tempDir, "safe", "mount")
-	if err := Validate(safeTarget, first); !errors.Is(err, ErrUnsafeMountPath) {
-		t.Fatalf("Validate(%q, %q) error = %v, want fail-closed ErrUnsafeMountPath", safeTarget, first, err)
+func TestValidateClassifiesProtectedDirectoryResolutionFailures(t *testing.T) {
+	tempDir := t.TempDir()
+	first := filepath.Join(tempDir, "first")
+	second := filepath.Join(tempDir, "second")
+	if err := os.Symlink("second", first); err != nil {
+		t.Fatalf("create first symlink: %v", err)
 	}
+	if err := os.Symlink("first", second); err != nil {
+		t.Fatalf("create second symlink: %v", err)
+	}
+	regularFile := filepath.Join(tempDir, "regular-file")
+	if err := os.WriteFile(regularFile, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("create regular file: %v", err)
+	}
+	customBin := filepath.Join(tempDir, "custom-bin")
+	if err := os.Mkdir(customBin, 0o755); err != nil {
+		t.Fatalf("create custom PATH directory: %v", err)
+	}
+
+	t.Run("environment failure is unverifiable", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			pathEnv    string
+			wantReason string
+		}{
+			{name: "symlink loop", pathEnv: first, wantReason: "too many symbolic links"},
+			{name: "regular file traversal", pathEnv: filepath.Join(regularFile, "bin"), wantReason: "is not a directory"},
+		}
+		safeTarget := filepath.Join(tempDir, "safe", "mount")
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				err := Validate(safeTarget, tt.pathEnv)
+				if !errors.Is(err, ErrMountPathUnverifiable) {
+					t.Fatalf("Validate(%q, %q) error = %v, want ErrMountPathUnverifiable", safeTarget, tt.pathEnv, err)
+				}
+				if errors.Is(err, ErrUnsafeMountPath) {
+					t.Fatalf("Validate(%q, %q) error = %v, must not be ErrUnsafeMountPath", safeTarget, tt.pathEnv, err)
+				}
+				if !strings.Contains(err.Error(), tt.wantReason) {
+					t.Fatalf("Validate(%q, %q) error = %v, want reason %q", safeTarget, tt.pathEnv, err, tt.wantReason)
+				}
+			})
+		}
+	})
+
+	t.Run("known policy violation takes precedence", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			path    string
+			pathEnv string
+		}{
+			{name: "fixed protected directory", path: "/usr/local/sbin", pathEnv: first},
+			{name: "valid PATH entry after loop", path: customBin, pathEnv: first + string(os.PathListSeparator) + customBin},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				err := Validate(tt.path, tt.pathEnv)
+				if !errors.Is(err, ErrUnsafeMountPath) {
+					t.Fatalf("Validate(%q, %q) error = %v, want ErrUnsafeMountPath", tt.path, tt.pathEnv, err)
+				}
+				if errors.Is(err, ErrMountPathUnverifiable) {
+					t.Fatalf("Validate(%q, %q) error = %v, must not be ErrMountPathUnverifiable", tt.path, tt.pathEnv, err)
+				}
+			})
+		}
+	})
 }
 
 func TestValidateRelativeAndEmptyPATHEntries(t *testing.T) {
