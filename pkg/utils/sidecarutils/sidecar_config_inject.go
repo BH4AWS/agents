@@ -43,35 +43,34 @@ func IsRuntimeEnabled(sandbox *agentsv1alpha1.Sandbox, runtimeName string) bool 
 	return false
 }
 
-func fetchInjectionConfiguration(ctx context.Context, cli client.Client) (InjectionConfigs, error) {
+func fetchInjectionConfiguration(ctx context.Context, cli client.Client) (injectionConfigs, error) {
 	logger := logf.FromContext(ctx)
-	configs := InjectionConfigs{}
-	sources := []struct {
-		name string
-		data *map[string]string
-	}{
-		{SandboxInjectionConfigName, &configs.Default},
-		{SandboxInjectionUserConfigName, &configs.User},
-	}
-	for _, source := range sources {
+	configs := injectionConfigs{}
+	for _, configMapName := range []string{SandboxInjectionConfigName, SandboxInjectionUserConfigName} {
 		config := &corev1.ConfigMap{}
 		err := cli.Get(ctx, types.NamespacedName{
 			Namespace: webhookutils.GetNamespace(), // Todo considering the security concern and rbac issue
-			Name:      source.name,
+			Name:      configMapName,
 		}, config)
 		if err != nil {
 			if errors.IsNotFound(err) {
-				logger.V(utils.DebugLogLevel).Info("injection configuration not found", "configMap", source.name)
+				logger.V(utils.DebugLogLevel).Info("injection configuration not found", "configMap", configMapName)
 				continue
 			}
-			return InjectionConfigs{}, err
+			return injectionConfigs{}, err
 		}
 
 		// Keep the source independently of the merged value, including explicit
 		// empty overrides. A found ConfigMap with nil Data is still present.
-		*source.data = maps.Clone(config.Data)
-		if *source.data == nil {
-			*source.data = make(map[string]string)
+		data := maps.Clone(config.Data)
+		if data == nil {
+			data = make(map[string]string)
+		}
+		switch configMapName {
+		case SandboxInjectionConfigName:
+			configs.Default = data
+		case SandboxInjectionUserConfigName:
+			configs.User = data
 		}
 	}
 

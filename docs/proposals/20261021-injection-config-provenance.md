@@ -3,12 +3,20 @@
 ## Background
 `sidecarutils` reads injection templates from `sandbox-injection-config` and
 an optional `sandbox-injection-config-user`. User configuration overrides only
-matching keys; other keys continue to use the default configuration. The current
-loader merges both sources immediately, so downstream code cannot distinguish
-explicit user overrides from defaults.
+matching keys; other keys continue to use the default configuration.
 
-This proposal preserves source information without changing template selection,
-injection order, configuration formats, or error handling.
+Before this change, `fetchInjectionConfiguration` returned only a merged map to
+its caller, `InjectSandboxRuntimes`. That function passes the map to
+`doSidecarInjection`, which uses `parseInjectConfig` to select and parse each
+runtime template before applying it to the Pod. The merged map does not tell
+`InjectSandboxRuntimes` whether a template was explicitly provided by the user
+or inherited from the default configuration.
+
+This proposal retains both sources at the loader boundary for future
+source-aware logic within `sidecarutils`. It does not introduce source-dependent
+injection behavior: the existing injection flow still consumes only the merged
+map. Template selection, injection order, configuration formats, and error
+handling remain unchanged.
 
 ## Data Model
 Define the following type in `pkg/utils/sidecarutils/config_types.go`:
@@ -16,7 +24,7 @@ Define the following type in `pkg/utils/sidecarutils/config_types.go`:
 ```go
 package sidecarutils
 
-type InjectionConfigs struct {
+type injectionConfigs struct {
     Default map[string]string
     User    map[string]string
 }
@@ -33,7 +41,7 @@ by the client or informer. Callers can detect explicit overrides by checking
 whether a key exists in `User`; an empty string also counts as an override.
 
 ## Loading and Merging
-`InjectionConfigs.Merged()` returns an independent, non-nil map by copying
+`injectionConfigs.Merged()` returns an independent, non-nil map by copying
 `Default` first and then `User`. Its result is identical to the existing merge:
 
 | Default configuration | User configuration | Merged result |
@@ -44,7 +52,7 @@ whether a key exists in `User`; an empty string also counts as an override.
 | Absent | `csi: custom` | `csi: custom` |
 | Both sources absent or empty | — | Empty, non-nil map |
 
-`fetchInjectionConfiguration` returns `InjectionConfigs`. Read order,
+`fetchInjectionConfiguration` returns `injectionConfigs`. Read order,
 namespace selection, NotFound handling, and propagation of other lookup errors
 remain unchanged. A failed read returns the zero value and the original error,
 without passing partial configuration to the injection flow.

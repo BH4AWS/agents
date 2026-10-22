@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -451,6 +452,7 @@ func TestInjectPodTemplateCSIAndRuntimeSidecar(t *testing.T) {
 			}
 			fakeClient := fake.NewClientBuilder().WithObjects(objs...).Build()
 			ctx := context.Background()
+			originalPod := tt.pod.DeepCopy()
 
 			err := InjectSandboxRuntimes(ctx, tt.sandbox, tt.pod, fakeClient)
 			if tt.expectError {
@@ -459,6 +461,10 @@ func TestInjectPodTemplateCSIAndRuntimeSidecar(t *testing.T) {
 				}
 				if len(tt.pod.Spec.InitContainers) != 0 {
 					t.Fatal("unexpected runtime injection after configuration error")
+				}
+				if !reflect.DeepEqual(tt.pod.Spec.Containers, originalPod.Spec.Containers) {
+					t.Fatalf("unexpected container changes after configuration error: got %+v, want %+v",
+						tt.pod.Spec.Containers, originalPod.Spec.Containers)
 				}
 				return
 			}
