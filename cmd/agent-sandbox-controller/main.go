@@ -27,6 +27,7 @@ import (
 	"time"
 	_ "time/tzdata" // Embed timezone database for scratch-based container images
 
+	kruiseappsv1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	"github.com/spf13/pflag"
 	gozap "go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -47,12 +48,14 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	securityv1alpha1 "github.com/openkruise/agents/api/security/v1alpha1"
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/client"
 	"github.com/openkruise/agents/pkg/controller"
 	sandboxctrl "github.com/openkruise/agents/pkg/controller/sandbox"
 	"github.com/openkruise/agents/pkg/controller/sandboxmetricsgc"
 	"github.com/openkruise/agents/pkg/features"
+	"github.com/openkruise/agents/pkg/identity/localsigner"
 	"github.com/openkruise/agents/pkg/tracing"
 	"github.com/openkruise/agents/pkg/utils"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
@@ -61,7 +64,6 @@ import (
 	"github.com/openkruise/agents/pkg/utils/webhookutils"
 	customwebhook "github.com/openkruise/agents/pkg/webhook"
 	"github.com/openkruise/agents/pkg/webhook/sandboxset/mutating"
-	kruiseappsv1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 )
 
 var (
@@ -74,6 +76,7 @@ func init() {
 
 	utilruntime.Must(agentsv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(kruiseappsv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(securityv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -92,6 +95,7 @@ func main() {
 	var clientBurst int
 	var defaultPersistentContents string
 	var runtimeClientCertDir string
+	var identityIssuerURL, identitySigningKeyFile string
 
 	// New variables for pprof
 	var enablePprof bool
@@ -135,6 +139,11 @@ func main() {
 			"When set, the controller reaches TLS-capable agent-runtimes over HTTPS and advertises the runtime "+
 			"HTTPS capability on newly created sandboxes; empty disables both. Set it only after the sidecar "+
 			"injection template already serves HTTPS, since the capability annotation is write-once.")
+	flag.StringVar(&identityIssuerURL, "identity-issuer-url", "",
+		"Public HTTPS URL of the identity issuer. Together with --identity-signing-key-file it enables local "+
+			"token signing; empty keeps the community default provider.")
+	flag.StringVar(&identitySigningKeyFile, "identity-signing-key-file", "",
+		"PEM private key used to sign sandbox tokens. Must be set together with --identity-issuer-url.")
 
 	var metricsAsyncWorkers int
 	var metricsAsyncQueueCap int
@@ -338,6 +347,17 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
+	}
+
+	// Install local token signing before any controller can issue a token. Both
+	// settings empty keeps the community default provider in place.
+	identityOptions := localsigner.Options{IssuerURL: identityIssuerURL, SigningKeyFile: identitySigningKeyFile}
+	if identityOptions.Enabled() {
+		if err := identityOptions.Install(mgr.GetClient()); err != nil {
+			setupLog.Error(err, "unable to install the local identity provider")
+			os.Exit(1)
+		}
+		setupLog.Info("local identity provider installed", "issuerURL", identityIssuerURL)
 	}
 
 	metricsGC := sandboxmetricsgc.NewReconciler(sandboxmetricsgc.Options{

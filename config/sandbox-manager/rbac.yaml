@@ -24,6 +24,12 @@ rules:
   - apiGroups: [ "agents.kruise.io" ]
     resources: [ "sandboxes/status", "sandboxsets/status" ]
     verbs: [ "get", "update", "patch" ]
+  # Required only when local token signing is enabled (--identity-issuer-url and
+  # --identity-signing-key-file): the sandbox-manager verifies the selected
+  # AgentIdentity is Ready before minting an ID token.
+  - apiGroups: [ "security.agents.kruise.io" ]
+    resources: [ "agentidentities" ]
+    verbs: [ "get", "list", "watch" ]
   - apiGroups: [ "" ]
     resources: [ "persistentvolumes" ]
     verbs: [ "get", "list", "watch" ]

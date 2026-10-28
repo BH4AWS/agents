@@ -14,8 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command agent-identity-provider runs the controllers and, in later phases,
-// the services that own agent identity.
+// Command agent-identity-provider runs the controllers and services that own
+// agent identity: the AgentIdentity controller, and the OIDC discovery and
+// JWKS endpoints publishing the verification keys for locally signed tokens.
 //
 // It is a separate process from agent-sandbox-controller on purpose: identity is
 // a distinct failure domain with its own RBAC and its own release cadence, and a
@@ -39,6 +40,7 @@ import (
 	securityv1alpha1 "github.com/openkruise/agents/api/security/v1alpha1"
 	"github.com/openkruise/agents/client"
 	"github.com/openkruise/agents/pkg/agentidentity"
+	"github.com/openkruise/agents/pkg/identity/localsigner"
 )
 
 var (
@@ -54,10 +56,20 @@ func init() {
 func main() {
 	var metricsAddr, probeAddr string
 	var enableLeaderElection bool
+	var identityIssuerURL, identitySigningKeyFile, identityIssuerBindAddress string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election, ensuring only one active instance reconciles.")
+	flag.StringVar(&identityIssuerURL, "identity-issuer-url", "",
+		"Public HTTPS URL advertised as the OIDC issuer. Together with --identity-signing-key-file it enables "+
+			"serving OIDC discovery and the JWKS; empty disables both.")
+	flag.StringVar(&identitySigningKeyFile, "identity-signing-key-file", "",
+		"PEM private key whose public half is published in the JWKS. Must be the key the control plane signs with, "+
+			"and must be set together with --identity-issuer-url.")
+	flag.StringVar(&identityIssuerBindAddress, "identity-issuer-bind-address", "",
+		"Address the OIDC discovery and JWKS listener binds to. Required when OIDC endpoints are enabled; "+
+			"TLS is expected to be terminated in front of this listener.")
 
 	opts := zap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -89,6 +101,28 @@ func main() {
 	if err := agentidentity.Add(mgr); err != nil {
 		setupLog.Error(err, "unable to add the AgentIdentity controller")
 		os.Exit(1)
+	}
+
+	// Publish the verification keys exactly when a signing key is configured.
+	// The endpoints are optional because a deployment that does not issue local
+	// tokens has nothing to publish.
+	identityOptions := localsigner.Options{IssuerURL: identityIssuerURL, SigningKeyFile: identitySigningKeyFile}
+	if identityOptions.Enabled() {
+		issuer, err := identityOptions.NewIssuer()
+		if err != nil {
+			setupLog.Error(err, "unable to load the identity signing key")
+			os.Exit(1)
+		}
+		oidcServer, err := newIssuerServer(identityIssuerBindAddress, issuer)
+		if err != nil {
+			setupLog.Error(err, "unable to set up the OIDC discovery endpoints")
+			os.Exit(1)
+		}
+		if err := mgr.Add(oidcServer); err != nil {
+			setupLog.Error(err, "unable to add the OIDC discovery server")
+			os.Exit(1)
+		}
+		setupLog.Info("OIDC discovery endpoints enabled", "issuerURL", identityIssuerURL, "bindAddress", identityIssuerBindAddress)
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

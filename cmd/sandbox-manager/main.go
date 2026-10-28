@@ -31,12 +31,15 @@ import (
 	"github.com/spf13/pflag"
 	zapRaw "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	kruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	securityv1alpha1 "github.com/openkruise/agents/api/security/v1alpha1"
 	agentsclient "github.com/openkruise/agents/client"
+	"github.com/openkruise/agents/pkg/identity/localsigner"
 	"github.com/openkruise/agents/pkg/peersecurity"
 	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
@@ -112,6 +115,18 @@ func resolveSecretSettings(reader ctrlclient.Reader, ref string, current secretC
 	return cfg, nil
 }
 
+// newIdentityClient builds the reader the local identity provider uses to gate
+// ID-token issuance on AgentIdentity readiness. It is created only when local
+// signing is enabled, so a deployment using the community default provider
+// needs neither the scheme nor the extra permission.
+func newIdentityClient(clientConfig *rest.Config) (ctrlclient.Reader, error) {
+	scheme := kruntime.NewScheme()
+	if err := securityv1alpha1.AddToScheme(scheme); err != nil {
+		return nil, err
+	}
+	return ctrlclient.New(clientConfig, ctrlclient.Options{Scheme: scheme})
+}
+
 func main() {
 	// Define variables for pprof configuration
 	var enablePprof bool
@@ -156,6 +171,8 @@ func main() {
 	var trafficTokenMinValidity time.Duration
 	var trafficTokenMaxValidity time.Duration
 	var secretConfigRef string
+	var identityIssuerURL string
+	var identitySigningKeyFile string
 
 	utilfeature.DefaultMutableFeatureGate.AddFlag(pflag.CommandLine)
 
@@ -238,6 +255,11 @@ func main() {
 			"When set, the Secret is read once at startup and overrides the flag and environment values "+
 			"(all five data keys must be present); changes take effect only on restart. "+
 			"Leave it empty to keep the flag and environment values.")
+	pflag.StringVar(&identityIssuerURL, "identity-issuer-url", "",
+		"Public HTTPS URL of the identity issuer. Together with --identity-signing-key-file it enables local "+
+			"token signing; empty keeps the community default provider.")
+	pflag.StringVar(&identitySigningKeyFile, "identity-signing-key-file", "",
+		"PEM private key used to sign sandbox tokens. Must be set together with --identity-issuer-url.")
 
 	// Tracing flags (definitions shared with agent-sandbox-controller via
 	// tracing.Config.BindFlags; pulled into pflag by AddGoFlagSet below)
@@ -444,6 +466,21 @@ func main() {
 	defer hookCancel()
 	if err := startupHook(hookCtx, clientConfig); err != nil {
 		klog.Fatalf("startup hook failed: %v", err)
+	}
+
+	// Install local token signing after the startup hook so an explicitly
+	// configured signer wins over any provider that hook registered. Both
+	// settings empty keeps the community default provider in place.
+	identityOptions := localsigner.Options{IssuerURL: identityIssuerURL, SigningKeyFile: identitySigningKeyFile}
+	if identityOptions.Enabled() {
+		identityClient, err := newIdentityClient(clientConfig)
+		if err != nil {
+			klog.Fatalf("Failed to create client for the local identity provider: %v", err)
+		}
+		if err := identityOptions.Install(identityClient); err != nil {
+			klog.Fatalf("Failed to install the local identity provider: %v", err)
+		}
+		klog.InfoS("local identity provider installed", "issuerURL", identityIssuerURL)
 	}
 
 	sandboxController := e2b.NewController(e2b.ControllerOptions{
