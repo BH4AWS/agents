@@ -70,7 +70,11 @@ STAGING_DIR="$(mktemp -d "$ENVD_DIR/.staging.XXXXXX")" || {
 trap 'rm -rf "$STAGING_DIR"' EXIT
 
 STAGED_ARTIFACTS=""
-for artifact in envd-run.sh envd; do
+ARTIFACTS="envd-run.sh envd"
+if [ -f "./agent-init" ]; then
+    ARTIFACTS="$ARTIFACTS agent-init"
+fi
+for artifact in $ARTIFACTS; do
     destination="$ENVD_DIR/$artifact"
     reason=""
     if [ ! -f "$destination" ]; then

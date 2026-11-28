@@ -9,6 +9,7 @@ set -e  # Enable exit on error for the entire script
 # user-init command. Run `envd-run.sh --help` for the authoritative flag
 # reference.
 NOLOG=false
+FOREGROUND=false
 HELPER_MODE=false
 LOCAL_MODE=false
 USER_INIT_ARGS=()
@@ -28,6 +29,10 @@ while [ $# -gt 0 ]; do
             NOLOG=true
             shift
             ;;
+        --foreground)
+            FOREGROUND=true
+            shift
+            ;;
         --)
             # Everything after -- becomes the user-init command (no shell interpretation)
             shift
@@ -40,6 +45,7 @@ while [ $# -gt 0 ]; do
             echo "                       skips default user creation"
             echo "  --local              Launch agent-runtime in local mode (--runtime-mode=local) instead of envd"
             echo "  --nolog              Suppress runtime stdout/stderr (redirect to /dev/null)"
+            echo "  --foreground         Keep the runtime supervised by the caller"
             echo "  FLAGS...             In --helper/--local mode, other flags before -- are forwarded to the"
             echo "                       launched binary (e.g. --helper-socket, --allowed-peer-uid, --port)"
             echo "  -- <cmd> [args...]   Run user-init command directly without shell interpretation"
@@ -250,6 +256,16 @@ elif [ "$LOCAL_MODE" = "true" ]; then
     RUN_CMD=("$ENVD_DIR/agent-runtime" --runtime-mode=local --isnotfc "${FORWARD_ARGS[@]}")
 else
     RUN_CMD=("$ENVD_DIR/envd" --isnotfc)
+fi
+
+if [ "$FOREGROUND" = "true" ]; then
+    if [ ${#USER_INIT_ARGS[@]} -gt 0 ]; then
+        "${USER_INIT_ARGS[@]}"
+    fi
+    if [ "$NOLOG" = "true" ]; then
+        exec "${RUN_CMD[@]}" >/dev/null 2>&1
+    fi
+    exec "${RUN_CMD[@]}"
 fi
 
 # Bounds for the non-root log-file fallback (env-overridable for tuning/tests):

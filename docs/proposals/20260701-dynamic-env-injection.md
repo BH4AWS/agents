@@ -35,6 +35,14 @@ execute once the sandbox is assigned and initialized.
 > volume to the `/mnt/envd/claim` subdirectory of the envd volume, which `Deferred` pools already
 > require.
 
+## Independent PID 1 supervision
+
+`agent-init` is an optional standalone supervisor for one explicit business command and one foreground backend. It can be used without a Kubernetes controller: `/mnt/envd/agent-init run -- /app/server`. The runtime image stages the binary alongside `envd-run.sh`, whose optional `--foreground` mode uses `exec` instead of detached startup. Existing image launch behavior remains unchanged until the caller explicitly selects `agent-init`.
+
+The supervisor starts the backend and business immediately. Business exit or exec failure leaves PID 1 and the backend available for `agent-init start`, `stop`, `restart`, and `status`. Backend recovery uses capped backoff; automatic business restart is disabled unless `--auto-restart` is specified and respects `--restart-limit`.
+
+An explicit `agent-init init` request reads lifecycle identity, revision, environment variables, and an access token from `AGENT_INIT_PAYLOAD`. It confirms the backend's existing `/init` contract and retains a snapshot for backend recovery and subsequent business starts; it does not rewrite a running business environment. `--wait-for-init` is an optional CLI mode, not a controller or Claim integration. The control socket is restricted to the supervisor's UID and does not isolate mutually hostile processes with that UID. Linux process-group cleanup does not guarantee removal of descendants that create a new session. Image ENTRYPOINT discovery, cgroup isolation, and durable stop state across container replacement are outside this scope.
+
 ## Motivation
 
 In the current architecture, a SandboxSet pre-creates a pool of warm sandbox pods. The pod's container command
