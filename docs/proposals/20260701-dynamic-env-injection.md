@@ -43,6 +43,14 @@ The supervisor starts the backend and business immediately. Business exit or exe
 
 An explicit `agent-init init` request reads lifecycle identity, revision, environment variables, and an access token from `AGENT_INIT_PAYLOAD`. It confirms the backend's existing `/init` contract and retains a snapshot for backend recovery and subsequent business starts; it does not rewrite a running business environment. `--wait-for-init` is an optional CLI mode, not a controller or Claim integration. The control socket is restricted to the supervisor's UID and does not isolate mutually hostile processes with that UID. Linux process-group cleanup does not guarantee removal of descendants that create a new session. Image ENTRYPOINT discovery, cgroup isolation, and durable stop state across container replacement are outside this scope.
 
+## Opt-in controller and initialization integration
+
+The Pod template annotation `agents.kruise.io/managed-process: "true"` selects the standalone supervisor. The controller requires an explicit main container command, a private container PID namespace, and runtime artifacts mounted at `/mnt/envd`. It wraps only the first business container, preserves its original arguments, working directory, and environment, and moves a direct `envd-run.sh` postStart invocation into the supervised foreground backend. Templates without this annotation retain their existing startup behavior.
+
+The business starts when the Sandbox starts, without waiting for Claim. After `/init` succeeds, the existing authenticated process RPC invokes `agent-init init` with an environment-only payload and requires an initialization acknowledgement. That notification is currently executed as root, so the example uses a root supervisor with a same-UID control socket. The runtime URL and refreshed Sandbox identity follow existing transport resolution, and TLS pinned transport negotiates HTTP/2 for the process RPC. Managed initialization rejects redirects and does not treat a ReInit 401 as success; legacy initialization semantics remain unchanged.
+
+Claim environment variables apply to backend-executed processes and future business starts, not the running business. Explicit restart is required to make them visible to that process. Only runtime TCP probes, including traffic-proxy rewrites of those probes, are accepted; application probes that become unhealthy after an intentional business stop are rejected. The example is `examples/managed-process.yaml`. This integration does not implement image ENTRYPOINT discovery or the separate `Immediate`/`Deferred` API proposal below. Full SandboxSet-to-Claim acceptance on a deployed controller remains a separate validation step.
+
 ## Motivation
 
 In the current architecture, a SandboxSet pre-creates a pool of warm sandbox pods. The pod's container command

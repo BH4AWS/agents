@@ -313,12 +313,16 @@ func TestTLSMode_EveryCapabilityGroupRidesTheResolvedTransport(t *testing.T) {
 	// handlers (which never expose it) are covered just like the plain routes.
 	var mu sync.Mutex
 	var gotHosts []string
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var gotProtocols []int
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		gotHosts = append(gotHosts, r.Host)
+		gotProtocols = append(gotProtocols, r.ProtoMajor)
 		mu.Unlock()
 		mux.ServeHTTP(w, r)
 	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
 	t.Cleanup(server.Close)
 
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
@@ -405,6 +409,7 @@ func TestTLSMode_EveryCapabilityGroupRidesTheResolvedTransport(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mu.Lock()
 			gotHosts = nil
+			gotProtocols = nil
 			mu.Unlock()
 
 			require.NoError(t, tt.invoke(context.Background(), newTLSRuntime()))
@@ -419,6 +424,9 @@ func TestTLSMode_EveryCapabilityGroupRidesTheResolvedTransport(t *testing.T) {
 				// Addressed by certificate hostname even though the connection
 				// was pinned to the Pod IP.
 				assert.Contains(t, h, authority)
+			}
+			for _, protocol := range gotProtocols {
+				assert.Equal(t, 2, protocol)
 			}
 		})
 	}

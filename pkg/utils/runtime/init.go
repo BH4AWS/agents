@@ -25,14 +25,17 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/logs"
 	"github.com/openkruise/agents/pkg/utils/runtime/config"
+	"github.com/openkruise/agents/proto/envd/process"
 )
 
 // initPath is the route of the agent-runtime init handshake endpoint. The
@@ -49,8 +52,8 @@ const initRequestTimeout = time.Second
 type InitAPI interface {
 	// Init drives the POST /init handshake, delivering env vars and the access
 	// token in the JSON body. A 204/2xx response means the runtime accepted the
-	// init data. When opts.ReInit is true, a 401 response is treated as success:
-	// the runtime already holds a token, i.e. it is already initialized.
+	// init data. For legacy sandboxes, opts.ReInit treats 401 as success. Managed
+	// sandboxes require a successful handshake followed by PID-1 acknowledgement.
 	Init(ctx context.Context, opts config.InitRuntimeOptions) error
 }
 
@@ -73,14 +76,54 @@ func (i *initAPI) Init(ctx context.Context, opts config.InitRuntimeOptions) erro
 	transport := i.r.transportLogValues(i.r.sbx)
 	log.Info("init runtime starting", append(transport, "reInit", opts.ReInit)...)
 
+	// call refreshes a local sandbox variable, not r.sbx. Track that binding in
+	// a per-invocation client copy; never mutate a shared Runtime or its options.
+	r := *i.r
+	bound := r.sbx
+	refresh := r.refreshFn
+	r.refreshFn = func(ctx context.Context) (*agentsv1alpha1.Sandbox, error) {
+		if refresh != nil {
+			updated, err := refresh(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if updated != nil {
+				bound = updated
+			}
+		}
+		if bound == nil || bound.Annotations[utils.AnnotationManagedProcess] != "true" {
+			// Keep legacy transport, request and response semantics untouched.
+			r.client, r.tlsEnabled = i.r.client, i.r.tlsEnabled
+			return bound, nil
+		}
+		// call historically accepts non-error 3xx responses. Managed init must
+		// observe a real 2xx, not silently release the workload after a redirect.
+		// Resolve the existing transport first (including pinned TLS), then bind
+		// it to this invocation only so both HTTP and HTTPS enforce that rule.
+		base, httpClient, err := i.r.resolveTransport(bound, i.r.client)
+		if err != nil {
+			return nil, err
+		}
+		initClient := *httpClient
+		transport := initClient.Transport
+		if transport == nil {
+			transport = http.DefaultTransport
+		}
+		initClient.Transport = initStatusTransport{transport}
+		r.client, r.tlsEnabled = &initClient, false
+		addressed := bound.DeepCopy()
+		addressed.Annotations[agentsv1alpha1.AnnotationRuntimeURL] = base
+		return addressed, nil
+	}
 	start := time.Now()
-	err := i.r.call(ctx, http.MethodPost, initPath, opts, nil)
+	err := r.call(ctx, http.MethodPost, initPath, opts, nil)
+	managed := bound != nil && bound.Annotations[utils.AnnotationManagedProcess] == "true"
 	// The runtime rejects an init whose body token is absent or no longer
 	// matches its stored token with 401. On a re-init (resume/recreate) that
 	// means the runtime is already initialized, which is the desired end state.
 	// call never retries a 4xx, so this classification happens exactly once.
 	var apiErr *APIError
-	if opts.ReInit && errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized {
+	if !managed && opts.ReInit && errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized {
 		log.Info("init runtime returned 401, treated as success because ReInit is true",
 			append(transport, "cost", time.Since(start))...)
 		return nil
@@ -92,7 +135,89 @@ func (i *initAPI) Init(ctx context.Context, opts config.InitRuntimeOptions) erro
 		log.Error(err, "init runtime failed", append(transport, "cost", time.Since(start))...)
 		return err
 	}
+	if managed {
+		r = *i.r
+		// /init has just installed this token. Do not authenticate the process
+		// RPC using a stale annotation, and do not mutate a cached Sandbox.
+		r.sbx = bound.DeepCopy()
+		if r.sbx.Annotations == nil {
+			r.sbx.Annotations = map[string]string{}
+		}
+		r.sbx.Annotations[agentsv1alpha1.AnnotationRuntimeAccessToken] = opts.AccessToken
+		delete(r.sbx.Annotations, agentsv1alpha1.AnnotationEnvdAccessToken)
+		if err := notifyManagedProcess(ctx, &r, opts); err != nil {
+			return err
+		}
+	}
 	log.Info("init runtime completed", append(transport, "cost", time.Since(start))...)
+	return nil
+}
+
+// initStatusTransport rejects non-2xx, non-error responses without changing the
+// shared runtime transport or following redirects for a managed handshake.
+// HTTP error responses still flow through call's existing APIError mapping.
+type initStatusTransport struct {
+	http.RoundTripper
+}
+
+func (t initStatusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.RoundTripper.RoundTrip(req)
+	if err != nil {
+		return resp, err
+	}
+	if resp.StatusCode < http.StatusOK || (resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest) {
+		if err := resp.Body.Close(); err != nil {
+			return nil, fmt.Errorf("close non-successful init response: %w", err)
+		}
+		return nil, &APIError{Path: initPath, StatusCode: resp.StatusCode}
+	}
+	return resp, nil
+}
+
+// notifyManagedProcess makes one bounded RPC after /init. It does not retry:
+// outer init retries drive recovery, so a payload's revision never changes
+// between attempts to deliver that payload. No environment or output is logged.
+func notifyManagedProcess(ctx context.Context, r *runtimeClient, opts config.InitRuntimeOptions) error {
+	if r.sbx.UID == "" {
+		return fmt.Errorf("managed process initialization requires a Sandbox UID")
+	}
+	payload, err := json.Marshal(struct {
+		LifecycleID string            `json:"lifecycleID"`
+		Revision    int64             `json:"revision"`
+		EnvVars     map[string]string `json:"envVars"`
+		AccessToken string            `json:"accessToken"`
+	}{string(r.sbx.UID), time.Now().UnixNano(), opts.EnvVars, opts.AccessToken})
+	if err != nil {
+		return fmt.Errorf("encode managed process initialization: %w", err)
+	}
+	result, err := r.Process().Run(ctx, RunCommandRequest{
+		ProcessConfig: &process.ProcessConfig{
+			Cmd:  utils.ManagedProcessBinary,
+			Args: []string{"init"},
+			Envs: map[string]string{"AGENT_INIT_PAYLOAD": string(payload)},
+		},
+		Timeout:        10 * time.Second,
+		ProcessTimeout: 10 * time.Second,
+		OutputOptions:  ProcessOutputOptions{MaxBytes: 4 << 10, SuppressResultLog: true},
+		// The demo runtime is root. Non-root runtimes must be configured to
+		// permit resolving root and accessing the supervisor's control socket.
+		AuthUser: "root",
+	})
+	if err != nil {
+		return fmt.Errorf("notify managed process initialization: %w", err)
+	}
+	if !result.Exited || result.ExitCode != 0 {
+		return fmt.Errorf("managed process initialization did not exit successfully (exited=%t, exitCode=%d)", result.Exited, result.ExitCode)
+	}
+	var response struct {
+		Initialized bool `json:"initialized"`
+	}
+	if err := json.Unmarshal([]byte(strings.Join(result.Stdout, "")), &response); err != nil {
+		return fmt.Errorf("invalid managed process initialization acknowledgement: %w", err)
+	}
+	if !response.Initialized {
+		return fmt.Errorf("managed process initialization was not acknowledged")
+	}
 	return nil
 }
 

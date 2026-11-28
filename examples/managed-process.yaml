@@ -1,0 +1,72 @@
+apiVersion: agents.kruise.io/v1alpha1
+kind: SandboxSet
+metadata:
+  name: managed-process-demo
+  annotations:
+    e2b.agents.kruise.io/should-init-envd: "true"
+spec:
+  replicas: 1
+  template:
+    metadata:
+      annotations:
+        agents.kruise.io/managed-process: "true"
+    spec:
+      initContainers:
+        - name: agent-runtime
+          # Requires an agent-runtime image built with agent-init staged into ENVD_DIR.
+          image: openkruise/agent-runtime:latest
+          restartPolicy: Always
+          env:
+            - name: ENVD_DIR
+              value: /mnt/envd
+          volumeMounts:
+            - name: envd-volume
+              mountPath: /mnt/envd
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - test -x /mnt/envd/agent-init && test -x /mnt/envd/envd && test -x /mnt/envd/envd-run.sh
+            periodSeconds: 1
+            failureThreshold: 120
+      containers:
+        - name: sandbox
+          image: debian:bookworm-slim
+          command: ["/bin/sh"]
+          args:
+            - -c
+            - 'printf "business pid=%s message=%s\n" "$$" "$DEMO_MESSAGE"; trap "exit 0" TERM INT; while :; do sleep 1 & wait $!; done'
+          securityContext:
+            runAsUser: 0
+          env:
+            - name: DEMO_MESSAGE
+              value: started-before-claim
+            - name: ENVD_DIR
+              value: /mnt/envd
+          volumeMounts:
+            - name: envd-volume
+              mountPath: /mnt/envd
+          lifecycle:
+            postStart:
+              exec:
+                command: ["bash", "/mnt/envd/envd-run.sh"]
+          startupProbe:
+            tcpSocket:
+              port: 49983
+            periodSeconds: 1
+            failureThreshold: 120
+      terminationGracePeriodSeconds: 15
+      volumes:
+        - name: envd-volume
+          emptyDir: {}
+---
+apiVersion: agents.kruise.io/v1alpha1
+kind: SandboxClaim
+metadata:
+  name: managed-process-demo
+spec:
+  templateName: managed-process-demo
+  replicas: 1
+  envVars:
+    DEMO_MESSAGE: initialized-by-claim

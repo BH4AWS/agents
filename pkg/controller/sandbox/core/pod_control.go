@@ -213,6 +213,29 @@ func (c *PodControl) CreatePod(ctx context.Context, args CreatePodArgs) (*corev1
 		}
 	}
 
+	// Wrap only after checkpoint replay, so all generators share the same
+	// explicit-argv contract and already-wrapped checkpoints stay idempotent.
+	managed, err := wrapManagedProcess(pod)
+	if err != nil {
+		c.recorder.Event(box, corev1.EventTypeWarning, agentsv1alpha1.SandboxReadyReasonPodCreateFailed,
+			fmt.Sprintf("Failed to wrap managed process: %v", err))
+		if args.NewStatus != nil {
+			utils.SetSandboxCondition(args.NewStatus, metav1.Condition{
+				Type:               string(agentsv1alpha1.SandboxConditionReady),
+				Status:             metav1.ConditionFalse,
+				LastTransitionTime: metav1.Now(),
+				Reason:             agentsv1alpha1.SandboxReadyReasonPodCreateFailed,
+				Message:            utils.TruncateConditionMessage(err.Error()),
+			})
+		}
+		return nil, err
+	}
+	if managed {
+		if err := c.stampManagedProcessAnnotation(ctx, box); err != nil {
+			return nil, err
+		}
+	}
+
 	// Stamp the runtime HTTPS capability onto the sandbox before the pod is
 	// created: if the stamp fails the pod is not created and the whole creation
 	// is retried, so a live pod always implies a sandbox that already
@@ -378,6 +401,11 @@ func generateBasePodFromSandbox(ctx context.Context, args PodGenerateArgs) (*cor
 	}
 	if podTemplate == nil {
 		return nil, fmt.Errorf("pod template not found in sandbox %s/%s", box.Namespace, box.Name)
+	}
+	if podTemplate.Annotations[utils.AnnotationManagedProcess] == "true" {
+		// Managed wrapping must not rewrite the persisted template's argv or
+		// lifecycle through shared container slices returned by GetTemplateSpec.
+		podTemplate = podTemplate.DeepCopy()
 	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

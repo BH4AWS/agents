@@ -30,6 +30,14 @@ const (
 	// Previously defined in pkg/sandbox-manager/consts; moved here to break the
 	// utils → business-layer dependency.
 	RuntimePort = 49983
+
+	// AnnotationManagedProcess opts a pod template into the managed PID-1 runtime.
+	// Only the literal value "true" enables it; the controller stamps the same
+	// capability on the Sandbox before creating its wrapped pod.
+	AnnotationManagedProcess = "agents.kruise.io/managed-process"
+
+	// ManagedProcessBinary is staged by the runtime into the fixed envd mount.
+	ManagedProcessBinary = "/mnt/envd/agent-init"
 )
 
 const (

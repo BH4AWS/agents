@@ -151,6 +151,7 @@ func newPinnedTransport(dialIP string, port int, tlsCfg *tls.Config) *http.Trans
 	return &http.Transport{
 		TLSClientConfig:   tlsCfg,
 		DisableKeepAlives: true,
+		ForceAttemptHTTP2: true,
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			// Ignore the address derived from the request URL host and dial the
 			// real sandbox Pod IP instead. TLS is still performed by net/http
